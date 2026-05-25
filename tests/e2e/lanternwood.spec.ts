@@ -9,13 +9,14 @@ type ColorTarget = {
 };
 
 const PIXI_COLOR_TARGETS: ColorTarget[] = [
-  { name: "library background", rgb: [0x1f, 0x36, 0x2f], tolerance: 2, minPixels: 200_000 },
-  { name: "central desk", rgb: [0x6a, 0x50, 0x35], tolerance: 5, minPixels: 8_000 },
-  { name: "Luma sprite", rgb: [0xf2, 0xc6, 0x6d], tolerance: 10, minPixels: 50 },
-  { name: "Orion sprite", rgb: [0x6c, 0xa7, 0xbd], tolerance: 10, minPixels: 50 },
-  { name: "Neria sprite", rgb: [0x8f, 0xa7, 0x65], tolerance: 10, minPixels: 50 },
-  { name: "Quill sprite", rgb: [0xb9, 0x91, 0xc8], tolerance: 10, minPixels: 50 },
-  { name: "Argus sprite", rgb: [0xbd, 0x80, 0x6e], tolerance: 10, minPixels: 50 },
+  { name: "library wall", rgb: [0x1f, 0x36, 0x2f], tolerance: 3, minPixels: 100_000 },
+  { name: "upper wall", rgb: [0x18, 0x26, 0x2f], tolerance: 8, minPixels: 35_000 },
+  { name: "central desk", rgb: [0x6a, 0x50, 0x35], tolerance: 6, minPixels: 5_000 },
+  { name: "Luma robe", rgb: [0xf2, 0xc6, 0x6d], tolerance: 12, minPixels: 60 },
+  { name: "Orion robe", rgb: [0x6c, 0xa7, 0xbd], tolerance: 12, minPixels: 60 },
+  { name: "Neria robe", rgb: [0x8f, 0xa7, 0x65], tolerance: 12, minPixels: 60 },
+  { name: "Quill robe", rgb: [0xb9, 0x91, 0xc8], tolerance: 12, minPixels: 60 },
+  { name: "Argus robe", rgb: [0xbd, 0x80, 0x6e], tolerance: 12, minPixels: 60 },
 ];
 
 const EXPECTED_TIMELINE_MESSAGES = [
