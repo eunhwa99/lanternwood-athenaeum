@@ -35,10 +35,11 @@ function SceneContent({ state }: LanternwoodSceneProps) {
 
   useEffect(() => {
     const stage = app.stage;
+    const sprites = spritesRef.current;
     const initialPositions = {} as PositionMap;
 
     clearStage(stage);
-    spritesRef.current.clear();
+    sprites.clear();
     stage.addChild(createSceneBackground());
 
     for (const agent of Object.values(stateRef.current.agents)) {
@@ -49,7 +50,7 @@ function SceneContent({ state }: LanternwoodSceneProps) {
       view.container.x = home.x;
       view.container.y = home.y;
       stage.addChild(view.container);
-      spritesRef.current.set(agent.definition.id, view);
+      sprites.set(agent.definition.id, view);
     }
 
     positionsRef.current = initialPositions;
@@ -85,7 +86,7 @@ function SceneContent({ state }: LanternwoodSceneProps) {
     return () => {
       app.ticker.remove(tick);
       clearStage(stage);
-      spritesRef.current.clear();
+      sprites.clear();
       positionsRef.current = null;
     };
   }, [app]);
