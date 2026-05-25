@@ -3,7 +3,7 @@ import { Container, Graphics, Text } from "pixi.js";
 import { useEffect } from "react";
 import type { RunState } from "../events/types";
 import { createAgentSprite } from "./AgentSprite";
-import { CENTRAL_DESK, HOME_POSITIONS, SCENE_SIZE } from "./sceneLayout";
+import { CENTRAL_DESK, SCENE_SIZE, getAgentScenePosition } from "./sceneLayout";
 
 extend({ Container, Graphics, Text });
 
@@ -39,7 +39,7 @@ function SceneContent({ state }: LanternwoodSceneProps) {
 
     for (const agent of Object.values(state.agents)) {
       const sprite = createAgentSprite(agent);
-      const home = HOME_POSITIONS[agent.definition.id];
+      const home = getAgentScenePosition(agent.definition);
 
       sprite.x = home.x;
       sprite.y = home.y;
