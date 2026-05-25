@@ -59,6 +59,22 @@ describe("mock run adapter", () => {
     expect(second[0].eventId).not.toBe(first[0].eventId);
   });
 
+  it("does not collide for known base-31 hash collision inputs", async () => {
+    const first = [];
+    const second = [];
+
+    for await (const event of mockRunAdapter.startRun("Aa")) {
+      first.push(event);
+    }
+
+    for await (const event of mockRunAdapter.startRun("BB")) {
+      second.push(event);
+    }
+
+    expect(second[0].taskId).not.toBe(first[0].taskId);
+    expect(second[0].eventId).not.toBe(first[0].eventId);
+  });
+
   it("emits terminal done events for participating specialist agents", async () => {
     const events = [];
 

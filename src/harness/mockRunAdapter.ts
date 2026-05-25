@@ -2,13 +2,10 @@ import type { AgentEvent } from "../events/types";
 import type { RunAdapter } from "./runAdapter";
 
 function stableTaskId(input: string): string {
-  let hash = 0;
+  const bytes = new TextEncoder().encode(input);
+  const encoded = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
-  for (const char of input) {
-    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-  }
-
-  return `task-${hash.toString(36)}`;
+  return `task-${encoded || "empty"}`;
 }
 
 function event(
