@@ -177,6 +177,11 @@ test("fits the Pixi scene inside the visible frame on mobile", async ({ page }) 
 
   expect(frameBox).not.toBeNull();
   expect(canvasBox).not.toBeNull();
+  expect(frameBox!.x).toBeGreaterThanOrEqual(0);
+  expect(frameBox!.x + frameBox!.width).toBeLessThanOrEqual(390 + 1);
   expect(canvasBox!.width).toBeLessThanOrEqual(frameBox!.width + 1);
   expect(canvasBox!.height).toBeLessThanOrEqual(frameBox!.height + 1);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
+    .toBeLessThanOrEqual(390);
 });

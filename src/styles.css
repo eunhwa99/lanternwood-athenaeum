@@ -24,7 +24,9 @@ input {
 .dashboard {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 390px;
+  height: 100vh;
   min-height: 100vh;
+  overflow: hidden;
   background:
     radial-gradient(circle at 18% 12%, rgba(228, 185, 105, 0.18), transparent 30%),
     linear-gradient(135deg, #101821, #182a29 45%, #111820);
@@ -34,8 +36,10 @@ input {
   display: grid;
   grid-template-rows: auto auto;
   align-content: start;
+  justify-content: center;
   gap: 16px;
   padding: 24px;
+  overflow-y: auto;
 }
 
 .scene-frame {
@@ -140,6 +144,8 @@ p {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
+  width: min(100%, calc((100vh - 112px) * 960 / 620), 960px);
+  max-width: 100%;
 }
 
 .task-input input {
@@ -163,6 +169,8 @@ p {
 @media (max-width: 900px) {
   .dashboard {
     grid-template-columns: 1fr;
+    height: auto;
+    overflow: visible;
   }
 
   .side-panel {
