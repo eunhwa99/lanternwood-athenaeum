@@ -19,6 +19,7 @@ type StatusClockMap = Record<AgentId, { status: AgentStatus; changedAt: number }
 
 declare global {
   interface Window {
+    __LANTERNWOOD_DEBUG_AGENTS__?: Record<string, { status: AgentStatus; x: number; y: number }>;
     __LANTERNWOOD_FREEZE_ANIMATION__?: boolean;
   }
 }
@@ -31,6 +32,17 @@ function clearStage(stage: Container) {
 
 function isAnimationFrozen() {
   return typeof window !== "undefined" && window.__LANTERNWOOD_FREEZE_ANIMATION__ === true;
+}
+
+function updateDebugAgent(agentId: AgentId, status: AgentStatus, x: number, y: number) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.__LANTERNWOOD_DEBUG_AGENTS__ = {
+    ...window.__LANTERNWOOD_DEBUG_AGENTS__,
+    [agentId]: { status, x, y },
+  };
 }
 
 function renderFrozenFrame(
@@ -58,6 +70,7 @@ function renderFrozenFrame(
     view.container.x = target.x;
     view.container.y = target.y;
     updateAgentSprite(view, agent, fixedElapsedSeconds, false, settledStatusSeconds);
+    updateDebugAgent(agent.definition.id, agent.status, target.x, target.y);
   }
 }
 
@@ -141,6 +154,7 @@ function SceneContent({ state }: LanternwoodSceneProps) {
         view.container.y = current.y;
 
         updateAgentSprite(view, agent, elapsedRef.current, isTravelling, elapsedRef.current - statusClock.changedAt);
+        updateDebugAgent(agent.definition.id, agent.status, current.x, current.y);
       }
     };
 

@@ -86,7 +86,8 @@ describe("avatar animation", () => {
   it("keeps a done arrival pose visible while the avatar is travelling home", () => {
     const pose = getAvatarPose("done", 0.25, true, 2);
 
-    expect(pose.mode).toBe("moving");
+    expect(pose.mode).toBe("done");
+    expect(Math.abs(pose.legSwing)).toBeGreaterThan(0);
     expect(pose.effectAlpha).toBeGreaterThan(0.1);
   });
 });

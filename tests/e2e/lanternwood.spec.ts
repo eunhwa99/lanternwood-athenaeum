@@ -84,33 +84,10 @@ function inspectScenePixels(buffer: Buffer) {
   return colorCounts;
 }
 
-function countDifferentPixels(firstBuffer: Buffer, secondBuffer: Buffer) {
-  const first = PNG.sync.read(firstBuffer);
-  const second = PNG.sync.read(secondBuffer);
-  const width = Math.min(first.width, second.width);
-  const height = Math.min(first.height, second.height);
-  let differentPixels = 0;
-
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const firstOffset = (first.width * y + x) * 4;
-      const secondOffset = (second.width * y + x) * 4;
-      const channelDelta =
-        Math.abs(first.data[firstOffset] - second.data[secondOffset]) +
-        Math.abs(first.data[firstOffset + 1] - second.data[secondOffset + 1]) +
-        Math.abs(first.data[firstOffset + 2] - second.data[secondOffset + 2]) +
-        Math.abs(first.data[firstOffset + 3] - second.data[secondOffset + 3]);
-
-      if (channelDelta > 40) {
-        differentPixels += 1;
-      }
-    }
-  }
-
-  return differentPixels;
-}
-
 test("renders a nonblank Pixi scene and completes a mock agent run", async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as Window & { __LANTERNWOOD_EVENT_DELAY_MS__?: number }).__LANTERNWOOD_EVENT_DELAY_MS__ = 1_500;
+  });
   await page.goto("/");
 
   const canvas = page.locator("canvas");
@@ -132,13 +109,23 @@ test("renders a nonblank Pixi scene and completes a mock agent run", async ({ pa
   await page.getByLabel("Task request").fill("Draft a focused project plan");
   await page.getByRole("button", { name: "Send to Luma" }).click();
 
-  await expect(page.getByText("Orion studies the star maps for useful references")).toBeVisible();
-  const activeFrameBefore = await canvas.screenshot();
+  await expect(page.getByText("Orion studies the star maps for useful references")).toBeVisible({ timeout: 8_000 });
+  const timelineCountBefore = await page.locator(".timeline li").count();
+  await expect(page.locator(".agent-card", { hasText: "Orion" }).locator("strong")).toHaveText("working");
+  const activeOrionBefore = await page.evaluate(
+    () => (window as Window & { __LANTERNWOOD_DEBUG_AGENTS__?: Record<string, { status: string; x: number; y: number }> }).__LANTERNWOOD_DEBUG_AGENTS__?.orion,
+  );
   await page.waitForTimeout(120);
-  const activeFrameAfter = await canvas.screenshot();
-  expect(countDifferentPixels(activeFrameBefore, activeFrameAfter), "active animation pixel delta").toBeGreaterThan(500);
+  expect(await page.locator(".agent-card", { hasText: "Orion" }).locator("strong").textContent()).toBe("working");
+  expect(await page.locator(".timeline li").count()).toBe(timelineCountBefore);
+  const activeOrionAfter = await page.evaluate(
+    () => (window as Window & { __LANTERNWOOD_DEBUG_AGENTS__?: Record<string, { status: string; x: number; y: number }> }).__LANTERNWOOD_DEBUG_AGENTS__?.orion,
+  );
+  expect(activeOrionBefore?.status).toBe("working");
+  expect(activeOrionAfter?.status).toBe("working");
+  expect(Math.hypot((activeOrionAfter?.x ?? 0) - (activeOrionBefore?.x ?? 0), (activeOrionAfter?.y ?? 0) - (activeOrionBefore?.y ?? 0))).toBeGreaterThan(1);
 
-  await expect(page.getByText("Luma places the final summary on the central desk")).toBeVisible();
+  await expect(page.getByText("Luma places the final summary on the central desk")).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText("Orion returns to the star-map balcony")).toBeVisible();
   await expect(page.getByText("Neria closes the archive ledger")).toBeVisible();
   await expect(page.getByText("Argus lowers the review lantern")).toBeVisible();

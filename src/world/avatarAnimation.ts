@@ -55,7 +55,7 @@ export function getAvatarPose(status: AgentStatus, elapsedSeconds: number, isTra
 
   if (status === "done" && isTravelling) {
     return {
-      mode: "moving",
+      mode: "done",
       bob: Math.abs(fastWave) * 5,
       armSwing: fastWave * 0.28,
       legSwing: -fastWave * 0.55,

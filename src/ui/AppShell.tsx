@@ -9,7 +9,21 @@ import { AgentStatusPanel } from "./AgentStatusPanel";
 import { TaskInput } from "./TaskInput";
 import { Timeline } from "./Timeline";
 
-const visibleMockRunAdapter = createMockRunAdapter({ eventDelayMs: 280 });
+declare global {
+  interface Window {
+    __LANTERNWOOD_EVENT_DELAY_MS__?: number;
+  }
+}
+
+function getVisibleEventDelayMs() {
+  if (typeof window !== "undefined" && Number.isFinite(window.__LANTERNWOOD_EVENT_DELAY_MS__)) {
+    return window.__LANTERNWOOD_EVENT_DELAY_MS__;
+  }
+
+  return 800;
+}
+
+const visibleMockRunAdapter = createMockRunAdapter({ eventDelayMs: getVisibleEventDelayMs() });
 
 type AppShellProps = {
   runAdapter?: RunAdapter;
