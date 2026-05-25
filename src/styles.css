@@ -37,14 +37,19 @@ input {
   padding: 24px;
 }
 
-.stage-placeholder {
+.scene-frame {
   display: grid;
   place-items: center;
   min-height: 520px;
+  overflow: hidden;
   border: 1px solid rgba(230, 205, 145, 0.25);
   border-radius: 8px;
   background: rgba(18, 30, 34, 0.7);
-  color: #d9c989;
+}
+
+.lanternwood-canvas {
+  width: min(100%, 960px);
+  height: auto;
 }
 
 .side-panel {

@@ -3,6 +3,7 @@ import { AGENTS } from "../agents/registry";
 import { createInitialRunState, reduceAgentEvent } from "../events/reducer";
 import type { RunState } from "../events/types";
 import { mockRunAdapter } from "../harness/mockRunAdapter";
+import { LanternwoodScene } from "../world/LanternwoodScene";
 import { AgentStatusPanel } from "./AgentStatusPanel";
 import { TaskInput } from "./TaskInput";
 import { Timeline } from "./Timeline";
@@ -26,8 +27,8 @@ export function AppShell() {
   return (
     <main className="dashboard">
       <section className="library-stage">
-        <div className="stage-placeholder">
-          <p>The living library scene will render here.</p>
+        <div className="scene-frame">
+          <LanternwoodScene state={runState} />
         </div>
         <TaskInput disabled={isRunning} onSubmit={startMockRun} />
       </section>
