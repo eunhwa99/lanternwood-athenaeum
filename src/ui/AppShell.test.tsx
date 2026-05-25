@@ -4,7 +4,12 @@ import { renderApp } from "../test/render";
 import { AppShell } from "./AppShell";
 
 vi.mock("../world/LanternwoodScene", () => ({
-  LanternwoodScene: () => <div data-testid="lanternwood-scene" />,
+  LanternwoodScene: ({ state }: { state: { agents: { luma: { status: string } }; timeline: unknown[] } }) => (
+    <div data-testid="lanternwood-scene">
+      <span>scene-luma-{state.agents.luma.status}</span>
+      <span>scene-events-{state.timeline.length}</span>
+    </div>
+  ),
 }));
 
 describe("AppShell", () => {
@@ -26,6 +31,8 @@ describe("AppShell", () => {
     await waitFor(() => {
       expect(screen.getAllByText("done")).toHaveLength(4);
     });
+    expect(screen.getByText("scene-luma-done")).toBeInTheDocument();
+    expect(screen.getByText("scene-events-12")).toBeInTheDocument();
     expect(screen.getByText("idle")).toBeInTheDocument();
   });
 });
