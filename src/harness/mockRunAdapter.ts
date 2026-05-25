@@ -50,10 +50,11 @@ export function createMockRunAdapter(options: MockRunAdapterOptions = {}): RunAd
         event(taskId, 6, "neria", "agent.working", "Neria checks the archive for stable preferences"),
         event(taskId, 7, "neria", "agent.reporting", "Neria finds relevant memory notes"),
         event(taskId, 8, "argus", "agent.reviewing", "Argus checks the answer for risk and gaps"),
-        event(taskId, 9, "orion", "agent.done", "Orion returns to the star-map balcony"),
-        event(taskId, 10, "neria", "agent.done", "Neria closes the archive ledger"),
-        event(taskId, 11, "argus", "agent.done", "Argus lowers the review lantern"),
-        event(taskId, 12, "luma", "agent.done", "Luma places the final summary on the central desk"),
+        event(taskId, 9, "luma", "approval.requested", "Luma raises the blue approval lantern"),
+        event(taskId, 10, "orion", "agent.done", "Orion returns to the star-map balcony"),
+        event(taskId, 11, "neria", "agent.done", "Neria closes the archive ledger"),
+        event(taskId, 12, "argus", "agent.done", "Argus lowers the review lantern"),
+        event(taskId, 13, "luma", "agent.done", "Luma places the final summary on the central desk"),
       ];
 
       for (const item of events) {

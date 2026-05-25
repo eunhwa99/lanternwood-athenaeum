@@ -45,6 +45,7 @@ const EXPECTED_TIMELINE_MESSAGES = [
   "Neria checks the archive for stable preferences",
   "Neria finds relevant memory notes",
   "Argus checks the answer for risk and gaps",
+  "Luma raises the blue approval lantern",
   "Orion returns to the star-map balcony",
   "Neria closes the archive ledger",
   "Argus lowers the review lantern",
@@ -124,6 +125,33 @@ function countColorInSceneRegion(buffer: Buffer, rgb: [number, number, number], 
   return count;
 }
 
+function countBlueGlowInSceneRegion(buffer: Buffer, region: NonNullable<ColorTarget["region"]>) {
+  const image = PNG.sync.read(buffer);
+  const xScale = image.width / PIXI_SCENE_SIZE.width;
+  const yScale = image.height / PIXI_SCENE_SIZE.height;
+  const startX = Math.max(0, Math.floor(region.x * xScale));
+  const startY = Math.max(0, Math.floor(region.y * yScale));
+  const endX = Math.min(image.width, Math.ceil((region.x + region.width) * xScale));
+  const endY = Math.min(image.height, Math.ceil((region.y + region.height) * yScale));
+  let count = 0;
+
+  for (let y = startY; y < endY; y += 1) {
+    for (let x = startX; x < endX; x += 1) {
+      const offset = (image.width * y + x) * 4;
+      const red = image.data[offset];
+      const green = image.data[offset + 1];
+      const blue = image.data[offset + 2];
+      const alpha = image.data[offset + 3];
+
+      if (alpha > 0 && blue > red + 34 && green > red + 24 && blue > 150) {
+        count += 1;
+      }
+    }
+  }
+
+  return count;
+}
+
 async function readDebugAgent(page: Page, agentId: string) {
   return page.evaluate(
     (id) => (window as Window & { __LANTERNWOOD_DEBUG_AGENTS__?: Record<string, DebugAgentState> }).__LANTERNWOOD_DEBUG_AGENTS__?.[id],
@@ -176,6 +204,19 @@ test("renders a nonblank Pixi scene and completes a mock agent run", async ({ pa
   await assertActiveAgentVisible(canvas, activeOrionBefore!);
   expect(await page.locator(".agent-card", { hasText: "Orion" }).locator("strong").textContent()).toBe("working");
   expect(await page.locator(".timeline li").count()).toBe(timelineCountBefore);
+
+  await expect(page.getByText("Luma raises the blue approval lantern")).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".agent-card", { hasText: "Luma" }).locator("strong")).toHaveText("waitingApproval");
+  const approvalLuma = await readDebugAgent(page, "luma");
+  expect(approvalLuma?.status).toBe("waitingApproval");
+  const approvalScene = await canvas.screenshot();
+  const approvalGlowPixels = countBlueGlowInSceneRegion(approvalScene, {
+    x: approvalLuma!.x - 42,
+    y: approvalLuma!.y - 42,
+    width: 84,
+    height: 84,
+  });
+  expect(approvalGlowPixels, "blue approval glow pixels near live Luma position").toBeGreaterThan(20);
 
   await expect(page.getByText("Luma places the final summary on the central desk")).toBeVisible({ timeout: 45_000 });
   await expect(page.getByText("Orion returns to the star-map balcony")).toBeVisible();

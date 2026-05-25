@@ -38,7 +38,18 @@ describe("agent sprite", () => {
     updateAgentSprite(view, luma, 0.4, false);
 
     expect(view.container.alpha).toBeLessThan(1);
-    expect(view.parts.effect.tint).toBe(0xdd7777);
+    expect(view.parts.effect.tint).toBe(0xffffff);
+  });
+
+  it("keeps effect tint neutral because the ring is redrawn with the pose color", () => {
+    const state = createInitialRunState(AGENTS);
+    const luma = { ...state.agents.luma, status: "waitingApproval" as const };
+    const view = createAgentSprite(luma);
+
+    updateAgentSprite(view, luma, 0.4, false);
+
+    expect(view.parts.effect.tint).toBe(0xffffff);
+    expect(view.parts.effect.alpha).toBeGreaterThan(0.4);
   });
 
   it("keeps the upper body connected while bobbing", () => {

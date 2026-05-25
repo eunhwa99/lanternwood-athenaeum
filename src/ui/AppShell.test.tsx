@@ -28,12 +28,13 @@ describe("AppShell", () => {
     expect(screen.getByText("Orion returns to the star-map balcony")).toBeInTheDocument();
     expect(screen.getByText("Neria closes the archive ledger")).toBeInTheDocument();
     expect(screen.getByText("Argus lowers the review lantern")).toBeInTheDocument();
+    expect(screen.getByText("Luma raises the blue approval lantern")).toBeInTheDocument();
 
     await waitFor(() => {
       expect(screen.getAllByText("done")).toHaveLength(4);
     });
     expect(screen.getByText("scene-luma-done")).toBeInTheDocument();
-    expect(screen.getByText("scene-events-12")).toBeInTheDocument();
+    expect(screen.getByText("scene-events-13")).toBeInTheDocument();
     expect(screen.getByText("idle")).toBeInTheDocument();
   });
 });

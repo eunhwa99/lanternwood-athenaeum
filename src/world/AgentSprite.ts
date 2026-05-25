@@ -38,8 +38,9 @@ export function updateAgentSprite(
   view.parts.leftLeg.rotation = pose.legSwing;
   view.parts.rightLeg.rotation = -pose.legSwing;
   view.parts.prop.rotation = pose.propAngle;
+  view.parts.effect.clear().circle(0, 4, 36).stroke({ color: pose.effectColor, width: pose.mode === "waitingApproval" ? 4 : 2, alpha: 1 });
   view.parts.effect.alpha = pose.effectAlpha;
-  view.parts.effect.tint = pose.effectColor;
+  view.parts.effect.tint = 0xffffff;
   view.parts.effect.scale.set(0.85 + pose.effectAlpha * 0.35);
   view.parts.leftEye.scale.y = pose.blinkScale;
   view.parts.rightEye.scale.y = pose.blinkScale;

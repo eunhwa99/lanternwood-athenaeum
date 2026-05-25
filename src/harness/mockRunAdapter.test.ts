@@ -18,12 +18,14 @@ describe("mock run adapter", () => {
       "agent.working",
       "agent.reporting",
       "agent.reviewing",
+      "approval.requested",
       "agent.done",
       "agent.done",
       "agent.done",
       "agent.done",
     ]);
     expect(events[0].message).toBe("Plan my interview prep");
+    expect(events[8].message).toBe("Luma raises the blue approval lantern");
     expect(new Set(events.map((event) => event.taskId)).size).toBe(1);
   });
 

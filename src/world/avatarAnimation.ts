@@ -136,7 +136,7 @@ export function getAvatarPose(status: AgentStatus, elapsedSeconds: number, isTra
         armSwing: travelOverlay ? fastWave * 0.18 : -0.28,
         legSwing: travelOverlay ? travelLegSwing : 0,
         propAngle: 0.32 + wave * 0.1,
-        effectAlpha: 0.42 + Math.abs(wave) * 0.18,
+        effectAlpha: 0.82 + Math.abs(wave) * 0.14,
         effectColor: 0x8fd7ff,
         blinkScale,
       };

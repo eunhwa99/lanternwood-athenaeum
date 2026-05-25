@@ -92,7 +92,7 @@ export function createAvatarParts(agent: AgentDefinition): AvatarParts {
   prop.y = -10;
   prop.pivot.set(0, 0);
 
-  const effect = new Graphics().circle(0, 4, 36).stroke({ color: 0xf2c66d, width: 2, alpha: 0.5 });
+  const effect = new Graphics().circle(0, 4, 36).stroke({ color: 0xffffff, width: 2, alpha: 0.5 });
 
   root.addChild(shadow, leftLeg, rightLeg, body, leftArm, rightArm, head, prop, effect);
 
