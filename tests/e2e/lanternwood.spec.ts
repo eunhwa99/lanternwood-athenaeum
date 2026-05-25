@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { PNG } from "pngjs";
 
 type ColorTarget = {
@@ -12,6 +12,12 @@ type ColorTarget = {
     width: number;
     height: number;
   };
+};
+
+type DebugAgentState = {
+  status: string;
+  x: number;
+  y: number;
 };
 
 const PIXI_SCENE_SIZE = {
@@ -44,6 +50,8 @@ const EXPECTED_TIMELINE_MESSAGES = [
   "Argus lowers the review lantern",
   "Luma places the final summary on the central desk",
 ];
+
+test.setTimeout(60_000);
 
 function inspectScenePixels(buffer: Buffer) {
   const image = PNG.sync.read(buffer);
@@ -84,9 +92,60 @@ function inspectScenePixels(buffer: Buffer) {
   return colorCounts;
 }
 
+function countColorInSceneRegion(buffer: Buffer, rgb: [number, number, number], tolerance: number, region: NonNullable<ColorTarget["region"]>) {
+  const image = PNG.sync.read(buffer);
+  const xScale = image.width / PIXI_SCENE_SIZE.width;
+  const yScale = image.height / PIXI_SCENE_SIZE.height;
+  const startX = Math.max(0, Math.floor(region.x * xScale));
+  const startY = Math.max(0, Math.floor(region.y * yScale));
+  const endX = Math.min(image.width, Math.ceil((region.x + region.width) * xScale));
+  const endY = Math.min(image.height, Math.ceil((region.y + region.height) * yScale));
+  let count = 0;
+
+  for (let y = startY; y < endY; y += 1) {
+    for (let x = startX; x < endX; x += 1) {
+      const offset = (image.width * y + x) * 4;
+      const red = image.data[offset];
+      const green = image.data[offset + 1];
+      const blue = image.data[offset + 2];
+      const alpha = image.data[offset + 3];
+
+      if (
+        alpha > 0 &&
+        Math.abs(red - rgb[0]) <= tolerance &&
+        Math.abs(green - rgb[1]) <= tolerance &&
+        Math.abs(blue - rgb[2]) <= tolerance
+      ) {
+        count += 1;
+      }
+    }
+  }
+
+  return count;
+}
+
+async function readDebugAgent(page: Page, agentId: string) {
+  return page.evaluate(
+    (id) => (window as Window & { __LANTERNWOOD_DEBUG_AGENTS__?: Record<string, DebugAgentState> }).__LANTERNWOOD_DEBUG_AGENTS__?.[id],
+    agentId,
+  );
+}
+
+async function assertActiveAgentVisible(canvas: Locator, agent: DebugAgentState) {
+  const activeScene = await canvas.screenshot();
+  const robePixels = countColorInSceneRegion(activeScene, [0x6c, 0xa7, 0xbd], 20, {
+    x: agent.x - 26,
+    y: agent.y - 52,
+    width: 52,
+    height: 70,
+  });
+
+  expect(robePixels, "active Orion robe pixels near live position").toBeGreaterThan(150);
+}
+
 test("renders a nonblank Pixi scene and completes a mock agent run", async ({ page }) => {
   await page.addInitScript(() => {
-    (window as Window & { __LANTERNWOOD_EVENT_DELAY_MS__?: number }).__LANTERNWOOD_EVENT_DELAY_MS__ = 1_500;
+    (window as Window & { __LANTERNWOOD_EVENT_DELAY_MS__?: number }).__LANTERNWOOD_EVENT_DELAY_MS__ = 2_500;
   });
   await page.goto("/");
 
@@ -109,23 +168,21 @@ test("renders a nonblank Pixi scene and completes a mock agent run", async ({ pa
   await page.getByLabel("Task request").fill("Draft a focused project plan");
   await page.getByRole("button", { name: "Send to Luma" }).click();
 
-  await expect(page.getByText("Orion studies the star maps for useful references")).toBeVisible({ timeout: 8_000 });
+  await expect(page.getByText("Orion studies the star maps for useful references")).toBeVisible({ timeout: 15_000 });
   const timelineCountBefore = await page.locator(".timeline li").count();
   await expect(page.locator(".agent-card", { hasText: "Orion" }).locator("strong")).toHaveText("working");
-  const activeOrionBefore = await page.evaluate(
-    () => (window as Window & { __LANTERNWOOD_DEBUG_AGENTS__?: Record<string, { status: string; x: number; y: number }> }).__LANTERNWOOD_DEBUG_AGENTS__?.orion,
-  );
+  const activeOrionBefore = await readDebugAgent(page, "orion");
+  expect(activeOrionBefore?.status).toBe("working");
+  await assertActiveAgentVisible(canvas, activeOrionBefore!);
   await page.waitForTimeout(120);
   expect(await page.locator(".agent-card", { hasText: "Orion" }).locator("strong").textContent()).toBe("working");
   expect(await page.locator(".timeline li").count()).toBe(timelineCountBefore);
-  const activeOrionAfter = await page.evaluate(
-    () => (window as Window & { __LANTERNWOOD_DEBUG_AGENTS__?: Record<string, { status: string; x: number; y: number }> }).__LANTERNWOOD_DEBUG_AGENTS__?.orion,
-  );
+  const activeOrionAfter = await readDebugAgent(page, "orion");
   expect(activeOrionBefore?.status).toBe("working");
   expect(activeOrionAfter?.status).toBe("working");
   expect(Math.hypot((activeOrionAfter?.x ?? 0) - (activeOrionBefore?.x ?? 0), (activeOrionAfter?.y ?? 0) - (activeOrionBefore?.y ?? 0))).toBeGreaterThan(1);
 
-  await expect(page.getByText("Luma places the final summary on the central desk")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("Luma places the final summary on the central desk")).toBeVisible({ timeout: 45_000 });
   await expect(page.getByText("Orion returns to the star-map balcony")).toBeVisible();
   await expect(page.getByText("Neria closes the archive ledger")).toBeVisible();
   await expect(page.getByText("Argus lowers the review lantern")).toBeVisible();
