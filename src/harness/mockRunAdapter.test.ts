@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { mockRunAdapter } from "./mockRunAdapter";
+import { describe, expect, it, vi } from "vitest";
+import { createMockRunAdapter, mockRunAdapter } from "./mockRunAdapter";
 
 describe("mock run adapter", () => {
   it("emits a deterministic manager-led event sequence", async () => {
@@ -87,5 +87,25 @@ describe("mock run adapter", () => {
         .filter((event) => event.type === "agent.done")
         .map((event) => event.agentId),
     ).toEqual(["orion", "neria", "argus", "luma"]);
+  });
+
+  it("can delay event delivery for visible UI animation", async () => {
+    vi.useFakeTimers();
+    const adapter = createMockRunAdapter({ eventDelayMs: 300 });
+    const iterator = adapter.startRun("Plan my interview prep")[Symbol.asyncIterator]();
+
+    const first = iterator.next();
+    let settled = false;
+    first.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(299);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect((await first).value.type).toBe("task.created");
+    vi.useRealTimers();
   });
 });

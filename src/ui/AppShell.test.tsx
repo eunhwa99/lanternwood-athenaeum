@@ -1,5 +1,6 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { mockRunAdapter } from "../harness/mockRunAdapter";
 import { renderApp } from "../test/render";
 import { AppShell } from "./AppShell";
 
@@ -14,7 +15,7 @@ vi.mock("../world/LanternwoodScene", () => ({
 
 describe("AppShell", () => {
   it("runs the mock agent flow from task input through panels and timeline", async () => {
-    renderApp(<AppShell />);
+    renderApp(<AppShell runAdapter={mockRunAdapter} />);
 
     fireEvent.change(screen.getByLabelText("Task request"), {
       target: { value: "Draft a focused project plan" },

@@ -2,13 +2,20 @@ import { useMemo, useState } from "react";
 import { AGENTS } from "../agents/registry";
 import { createInitialRunState, reduceAgentEvent } from "../events/reducer";
 import type { RunState } from "../events/types";
-import { mockRunAdapter } from "../harness/mockRunAdapter";
+import { createMockRunAdapter } from "../harness/mockRunAdapter";
+import type { RunAdapter } from "../harness/runAdapter";
 import { LanternwoodScene } from "../world/LanternwoodScene";
 import { AgentStatusPanel } from "./AgentStatusPanel";
 import { TaskInput } from "./TaskInput";
 import { Timeline } from "./Timeline";
 
-export function AppShell() {
+const visibleMockRunAdapter = createMockRunAdapter({ eventDelayMs: 280 });
+
+type AppShellProps = {
+  runAdapter?: RunAdapter;
+};
+
+export function AppShell({ runAdapter = visibleMockRunAdapter }: AppShellProps) {
   const initialState = useMemo(() => createInitialRunState(AGENTS), []);
   const [runState, setRunState] = useState<RunState>(initialState);
   const [isRunning, setIsRunning] = useState(false);
@@ -17,7 +24,7 @@ export function AppShell() {
     setRunState(createInitialRunState(AGENTS));
     setIsRunning(true);
 
-    for await (const event of mockRunAdapter.startRun(prompt)) {
+    for await (const event of runAdapter.startRun(prompt)) {
       setRunState((current) => reduceAgentEvent(current, event));
     }
 
