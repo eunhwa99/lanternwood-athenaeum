@@ -108,6 +108,7 @@ test("renders a nonblank Pixi scene and completes a mock agent run", async ({ pa
   await page.evaluate(() => {
     (window as Window & { __LANTERNWOOD_FREEZE_ANIMATION__?: boolean }).__LANTERNWOOD_FREEZE_ANIMATION__ = true;
   });
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
 
   const finalScene = inspectScenePixels(await canvas.screenshot());
   for (const target of PIXI_COLOR_TARGETS) {
