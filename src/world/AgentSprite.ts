@@ -18,10 +18,16 @@ export function createAgentSprite(agent: AgentRuntimeState): AgentSpriteView {
   };
 }
 
-export function updateAgentSprite(view: AgentSpriteView, agent: AgentRuntimeState, elapsedSeconds: number, isTravelling: boolean): void {
-  const pose = getAvatarPose(agent.status, elapsedSeconds, isTravelling);
+export function updateAgentSprite(
+  view: AgentSpriteView,
+  agent: AgentRuntimeState,
+  elapsedSeconds: number,
+  isTravelling: boolean,
+  statusElapsedSeconds?: number,
+): void {
+  const pose = getAvatarPose(agent.status, elapsedSeconds, isTravelling, statusElapsedSeconds);
 
-  view.container.alpha = agent.status === "idle" ? 0.88 : 1;
+  view.container.alpha = agent.status === "failed" ? 0.7 : agent.status === "idle" ? 0.88 : 1;
   view.parts.body.y = -pose.bob;
   view.parts.head.y = -pose.bob * 0.8;
   view.parts.leftArm.rotation = pose.armSwing;
@@ -30,6 +36,7 @@ export function updateAgentSprite(view: AgentSpriteView, agent: AgentRuntimeStat
   view.parts.rightLeg.rotation = -pose.legSwing;
   view.parts.prop.rotation = pose.propAngle;
   view.parts.effect.alpha = pose.effectAlpha;
+  view.parts.effect.tint = pose.effectColor;
   view.parts.effect.scale.set(0.85 + pose.effectAlpha * 0.35);
   view.parts.leftEye.scale.y = pose.blinkScale;
   view.parts.rightEye.scale.y = pose.blinkScale;

@@ -2,7 +2,7 @@ import { Application, extend, useApplication } from "@pixi/react";
 import { Container, Graphics, Text } from "pixi.js";
 import { useEffect, useRef } from "react";
 import type { AgentId } from "../agents/types";
-import type { RunState } from "../events/types";
+import type { AgentStatus, RunState } from "../events/types";
 import { createAgentSprite, updateAgentSprite, type AgentSpriteView } from "./AgentSprite";
 import { approach, getAgentSceneTarget } from "./avatarAnimation";
 import { createSceneBackground } from "./sceneBackground";
@@ -15,6 +15,7 @@ type LanternwoodSceneProps = {
 };
 
 type PositionMap = Record<AgentId, { x: number; y: number }>;
+type StatusClockMap = Record<AgentId, { status: AgentStatus; changedAt: number }>;
 
 function clearStage(stage: Container) {
   for (const child of stage.removeChildren()) {
@@ -27,6 +28,7 @@ function SceneContent({ state }: LanternwoodSceneProps) {
   const stateRef = useRef(state);
   const spritesRef = useRef<Map<AgentId, AgentSpriteView>>(new Map());
   const positionsRef = useRef<PositionMap | null>(null);
+  const statusClocksRef = useRef<StatusClockMap | null>(null);
   const elapsedRef = useRef(0);
 
   useEffect(() => {
@@ -37,6 +39,7 @@ function SceneContent({ state }: LanternwoodSceneProps) {
     const stage = app.stage;
     const sprites = spritesRef.current;
     const initialPositions = {} as PositionMap;
+    const initialStatusClocks = {} as StatusClockMap;
 
     clearStage(stage);
     sprites.clear();
@@ -47,6 +50,7 @@ function SceneContent({ state }: LanternwoodSceneProps) {
       const home = getAgentScenePosition(agent.definition);
 
       initialPositions[agent.definition.id] = { ...home };
+      initialStatusClocks[agent.definition.id] = { status: agent.status, changedAt: elapsedRef.current };
       view.container.x = home.x;
       view.container.y = home.y;
       stage.addChild(view.container);
@@ -54,6 +58,7 @@ function SceneContent({ state }: LanternwoodSceneProps) {
     }
 
     positionsRef.current = initialPositions;
+    statusClocksRef.current = initialStatusClocks;
 
     const tick = () => {
       const deltaSeconds = app.ticker.deltaMS / 1000;
@@ -62,9 +67,16 @@ function SceneContent({ state }: LanternwoodSceneProps) {
       for (const agent of Object.values(stateRef.current.agents)) {
         const view = spritesRef.current.get(agent.definition.id);
         const positions = positionsRef.current;
+        const statusClocks = statusClocksRef.current;
 
-        if (!view || !positions) {
+        if (!view || !positions || !statusClocks) {
           continue;
+        }
+
+        const statusClock = statusClocks[agent.definition.id];
+        if (statusClock.status !== agent.status) {
+          statusClock.status = agent.status;
+          statusClock.changedAt = elapsedRef.current;
         }
 
         const current = positions[agent.definition.id];
@@ -77,7 +89,7 @@ function SceneContent({ state }: LanternwoodSceneProps) {
         view.container.x = current.x;
         view.container.y = current.y;
 
-        updateAgentSprite(view, agent, elapsedRef.current, isTravelling);
+        updateAgentSprite(view, agent, elapsedRef.current, isTravelling, elapsedRef.current - statusClock.changedAt);
       }
     };
 
@@ -88,6 +100,7 @@ function SceneContent({ state }: LanternwoodSceneProps) {
       clearStage(stage);
       sprites.clear();
       positionsRef.current = null;
+      statusClocksRef.current = null;
     };
   }, [app]);
 

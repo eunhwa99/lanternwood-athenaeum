@@ -18,10 +18,22 @@ export const WORK_POSITIONS: Record<AgentId, ScenePosition> = {
   argus: { x: 735, y: 195 },
 };
 
+export const REPORT_POSITIONS: Record<AgentId, ScenePosition> = {
+  luma: { x: 480, y: 315 },
+  orion: { x: 390, y: 282 },
+  neria: { x: 410, y: 348 },
+  quill: { x: 550, y: 348 },
+  argus: { x: 570, y: 282 },
+};
+
 export function getAgentScenePosition(agent: AgentDefinition): ScenePosition {
   return agent.homePosition;
 }
 
 export function getAgentWorkPosition(agentId: AgentId): ScenePosition {
   return WORK_POSITIONS[agentId];
+}
+
+export function getAgentReportPosition(agentId: AgentId): ScenePosition {
+  return REPORT_POSITIONS[agentId];
 }

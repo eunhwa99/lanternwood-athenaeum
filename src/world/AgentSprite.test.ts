@@ -29,4 +29,15 @@ describe("agent sprite", () => {
     expect(view.parts.leftEye.scale.y).toBeGreaterThan(0);
     expect(view.parts.rightArm.rotation).not.toBe(view.parts.leftArm.rotation);
   });
+
+  it("dims failed avatars and switches the effect ring to warning red", () => {
+    const state = createInitialRunState(AGENTS);
+    const luma = { ...state.agents.luma, status: "failed" as const };
+    const view = createAgentSprite(luma);
+
+    updateAgentSprite(view, luma, 0.4, false);
+
+    expect(view.container.alpha).toBeLessThan(1);
+    expect(view.parts.effect.tint).toBe(0xdd7777);
+  });
 });
