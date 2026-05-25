@@ -30,6 +30,9 @@ export function updateAgentSprite(
   view.container.alpha = agent.status === "failed" ? 0.7 : agent.status === "idle" ? 0.88 : 1;
   view.parts.body.y = -pose.bob;
   view.parts.head.y = -pose.bob * 0.8;
+  view.parts.leftArm.y = -4 - pose.bob;
+  view.parts.rightArm.y = -4 - pose.bob;
+  view.parts.prop.y = -10 - pose.bob;
   view.parts.leftArm.rotation = pose.armSwing;
   view.parts.rightArm.rotation = -pose.armSwing;
   view.parts.leftLeg.rotation = pose.legSwing;

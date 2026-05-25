@@ -49,6 +49,23 @@ export function getAvatarPose(status: AgentStatus, elapsedSeconds: number, isTra
   const blinkScale = Math.sin(elapsedSeconds * Math.PI * 0.8) > 0.96 ? 0.18 : 1;
   const effectColor = 0xf2c66d;
 
+  if (status === "failed") {
+    return { mode: "failed", bob: 0, armSwing: 0, legSwing: 0, propAngle: 0, effectAlpha: 0.72 + Math.abs(wave) * 0.18, effectColor: 0xdd7777, blinkScale };
+  }
+
+  if (status === "done" && isTravelling) {
+    return {
+      mode: "moving",
+      bob: Math.abs(fastWave) * 5,
+      armSwing: fastWave * 0.28,
+      legSwing: -fastWave * 0.55,
+      propAngle: -0.1,
+      effectAlpha: 0.18,
+      effectColor,
+      blinkScale,
+    };
+  }
+
   if (isTravelling || status === "moving") {
     return {
       mode: "moving",
@@ -102,8 +119,6 @@ export function getAvatarPose(status: AgentStatus, elapsedSeconds: number, isTra
         blinkScale,
       };
     }
-    case "failed":
-      return { mode: "failed", bob: 0, armSwing: 0, legSwing: 0, propAngle: 0, effectAlpha: 0.72 + Math.abs(wave) * 0.18, effectColor: 0xdd7777, blinkScale };
     default:
       return { mode: "idle", bob: wave * 2, armSwing: wave * 0.08, legSwing: 0, propAngle: wave * 0.04, effectAlpha: 0.12, effectColor, blinkScale };
   }

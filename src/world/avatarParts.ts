@@ -55,10 +55,12 @@ export function createAvatarParts(agent: AgentDefinition): AvatarParts {
     .fill({ color: 0xf0caa0 })
     .stroke({ color: 0x3b2d2d, width: 1, alpha: 0.25 });
   const hood = new Graphics().arc(0, -32, 21, Math.PI, Math.PI * 2).stroke({ color: darkColor, width: 10, alpha: 0.98 });
-  const leftEye = new Graphics().circle(-6, -33, 2).fill({ color: 0x1d2020 });
-  const rightEye = new Graphics().circle(6, -33, 2).fill({ color: 0x1d2020 });
+  const leftEye = new Graphics().circle(0, 0, 2).fill({ color: 0x1d2020 });
+  const rightEye = new Graphics().circle(0, 0, 2).fill({ color: 0x1d2020 });
   const smile = new Graphics().arc(0, -28, 6, 0.15, Math.PI - 0.15).stroke({ color: 0x5b3b34, width: 1, alpha: 0.8 });
 
+  leftEye.position.set(-6, -33);
+  rightEye.position.set(6, -33);
   head.addChild(hood, face, leftEye, rightEye, smile);
 
   for (const [arm, side] of [

@@ -17,10 +17,20 @@ type LanternwoodSceneProps = {
 type PositionMap = Record<AgentId, { x: number; y: number }>;
 type StatusClockMap = Record<AgentId, { status: AgentStatus; changedAt: number }>;
 
+declare global {
+  interface Window {
+    __LANTERNWOOD_FREEZE_ANIMATION__?: boolean;
+  }
+}
+
 function clearStage(stage: Container) {
   for (const child of stage.removeChildren()) {
     child.destroy({ children: true });
   }
+}
+
+function isAnimationFrozen() {
+  return typeof window !== "undefined" && window.__LANTERNWOOD_FREEZE_ANIMATION__ === true;
 }
 
 function SceneContent({ state }: LanternwoodSceneProps) {
@@ -61,6 +71,10 @@ function SceneContent({ state }: LanternwoodSceneProps) {
     statusClocksRef.current = initialStatusClocks;
 
     const tick = () => {
+      if (isAnimationFrozen()) {
+        return;
+      }
+
       const deltaSeconds = app.ticker.deltaMS / 1000;
       elapsedRef.current += deltaSeconds;
 

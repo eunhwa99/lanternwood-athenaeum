@@ -40,4 +40,32 @@ describe("agent sprite", () => {
     expect(view.container.alpha).toBeLessThan(1);
     expect(view.parts.effect.tint).toBe(0xdd7777);
   });
+
+  it("keeps the upper body connected while bobbing", () => {
+    const state = createInitialRunState(AGENTS);
+    const luma = { ...state.agents.luma, status: "working" as const };
+    const view = createAgentSprite(luma);
+
+    updateAgentSprite(view, luma, 0.25, true);
+
+    expect(view.parts.leftArm.y).toBe(view.parts.body.y - 4);
+    expect(view.parts.rightArm.y).toBe(view.parts.body.y - 4);
+    expect(view.parts.prop.y).toBe(view.parts.body.y - 10);
+  });
+
+  it("blinks eyes in place", () => {
+    const state = createInitialRunState(AGENTS);
+    const view = createAgentSprite(state.agents.luma);
+    const originalLeftEyeY = view.parts.leftEye.y;
+    const originalRightEyeY = view.parts.rightEye.y;
+
+    expect(originalLeftEyeY).toBe(-33);
+    expect(originalRightEyeY).toBe(-33);
+
+    updateAgentSprite(view, state.agents.luma, 0.65, false);
+
+    expect(view.parts.leftEye.y).toBe(originalLeftEyeY);
+    expect(view.parts.rightEye.y).toBe(originalRightEyeY);
+    expect(view.parts.leftEye.scale.y).toBeLessThan(1);
+  });
 });

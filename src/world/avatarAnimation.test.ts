@@ -57,4 +57,19 @@ describe("avatar animation", () => {
     expect(pose.effectColor).toBe(0xdd7777);
     expect(pose.effectAlpha).toBeGreaterThan(0.5);
   });
+
+  it("keeps failed warning colors while the failed avatar is travelling", () => {
+    const pose = getAvatarPose("failed", 0.25, true);
+
+    expect(pose.mode).toBe("failed");
+    expect(pose.effectColor).toBe(0xdd7777);
+    expect(pose.effectAlpha).toBeGreaterThan(0.5);
+  });
+
+  it("keeps a done arrival pose visible while the avatar is travelling home", () => {
+    const pose = getAvatarPose("done", 0.25, true, 2);
+
+    expect(pose.mode).toBe("moving");
+    expect(pose.effectAlpha).toBeGreaterThan(0.1);
+  });
 });
