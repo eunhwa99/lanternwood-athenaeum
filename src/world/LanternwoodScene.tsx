@@ -33,6 +33,34 @@ function isAnimationFrozen() {
   return typeof window !== "undefined" && window.__LANTERNWOOD_FREEZE_ANIMATION__ === true;
 }
 
+function renderFrozenFrame(
+  agents: RunState["agents"],
+  sprites: Map<AgentId, AgentSpriteView>,
+  positions: PositionMap,
+  statusClocks: StatusClockMap,
+) {
+  const fixedElapsedSeconds = 1.25;
+  const settledStatusSeconds = 1.2;
+
+  for (const agent of Object.values(agents)) {
+    const view = sprites.get(agent.definition.id);
+
+    if (!view) {
+      continue;
+    }
+
+    const target = getAgentSceneTarget(agent.definition, agent.status);
+    positions[agent.definition.id] = { ...target };
+    statusClocks[agent.definition.id] = {
+      status: agent.status,
+      changedAt: fixedElapsedSeconds - settledStatusSeconds,
+    };
+    view.container.x = target.x;
+    view.container.y = target.y;
+    updateAgentSprite(view, agent, fixedElapsedSeconds, false, settledStatusSeconds);
+  }
+}
+
 function SceneContent({ state }: LanternwoodSceneProps) {
   const { app } = useApplication();
   const stateRef = useRef(state);
@@ -71,14 +99,23 @@ function SceneContent({ state }: LanternwoodSceneProps) {
     statusClocksRef.current = initialStatusClocks;
 
     const tick = () => {
-      if (isAnimationFrozen()) {
+      const deltaSeconds = app.ticker.deltaMS / 1000;
+      const frozen = isAnimationFrozen();
+
+      if (!frozen) {
+        elapsedRef.current += deltaSeconds;
+      }
+
+      const agents = stateRef.current.agents;
+
+      if (frozen) {
+        if (positionsRef.current && statusClocksRef.current) {
+          renderFrozenFrame(agents, spritesRef.current, positionsRef.current, statusClocksRef.current);
+        }
         return;
       }
 
-      const deltaSeconds = app.ticker.deltaMS / 1000;
-      elapsedRef.current += deltaSeconds;
-
-      for (const agent of Object.values(stateRef.current.agents)) {
+      for (const agent of Object.values(agents)) {
         const view = spritesRef.current.get(agent.definition.id);
         const positions = positionsRef.current;
         const statusClocks = statusClocksRef.current;

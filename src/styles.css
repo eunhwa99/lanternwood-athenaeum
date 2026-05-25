@@ -32,7 +32,8 @@ input {
 
 .library-stage {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  align-content: start;
   gap: 16px;
   padding: 24px;
 }
@@ -40,7 +41,8 @@ input {
 .scene-frame {
   display: grid;
   place-items: center;
-  min-height: 520px;
+  width: min(100%, calc((100vh - 112px) * 960 / 620), 960px);
+  aspect-ratio: 960 / 620;
   overflow: hidden;
   border: 1px solid rgba(230, 205, 145, 0.25);
   border-radius: 8px;
@@ -48,7 +50,7 @@ input {
 }
 
 .lanternwood-canvas {
-  width: min(100%, 960px);
+  width: 100%;
   height: auto;
 }
 

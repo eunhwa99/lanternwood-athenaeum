@@ -43,6 +43,13 @@ describe("avatar animation", () => {
     expect(pose.effectAlpha).toBeGreaterThan(0.2);
   });
 
+  it("keeps approval waits visually active", () => {
+    const pose = getAvatarPose("waitingApproval", 0.5, false);
+
+    expect(pose.mode).toBe("reviewing");
+    expect(pose.effectAlpha).toBeGreaterThan(0.4);
+  });
+
   it("settles the done bounce after the completion moment", () => {
     const earlyPose = getAvatarPose("done", 0.25, false, 0.1);
     const settledPose = getAvatarPose("done", 0.25, false, 1.2);

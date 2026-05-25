@@ -95,6 +95,7 @@ export function getAvatarPose(status: AgentStatus, elapsedSeconds: number, isTra
       };
     case "reporting":
       return { mode: "reporting", bob: wave * 1.5, armSwing: -0.45, legSwing: 0, propAngle: -0.35, effectAlpha: 0.38, effectColor, blinkScale };
+    case "waitingApproval":
     case "reviewing":
       return {
         mode: "reviewing",
