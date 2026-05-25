@@ -170,3 +170,14 @@ p {
     border-top: 1px solid rgba(230, 205, 145, 0.2);
   }
 }
+
+@media (max-width: 420px) {
+  .library-stage,
+  .side-panel {
+    padding: 16px;
+  }
+
+  .task-input {
+    grid-template-columns: 1fr;
+  }
+}

@@ -31,7 +31,7 @@ describe("avatar animation", () => {
   it("returns a walking pose while an avatar is travelling", () => {
     const pose = getAvatarPose("working", 0.25, true);
 
-    expect(pose.mode).toBe("moving");
+    expect(pose.mode).toBe("working");
     expect(Math.abs(pose.legSwing)).toBeGreaterThan(0);
     expect(pose.bob).not.toBe(0);
   });
@@ -48,6 +48,16 @@ describe("avatar animation", () => {
 
     expect(pose.mode).toBe("reviewing");
     expect(pose.effectAlpha).toBeGreaterThan(0.4);
+  });
+
+  it("preserves reporting and review identity while travelling", () => {
+    const reportingPose = getAvatarPose("reporting", 0.25, true);
+    const reviewPose = getAvatarPose("reviewing", 0.25, true);
+
+    expect(reportingPose.mode).toBe("reporting");
+    expect(reportingPose.legSwing).not.toBe(0);
+    expect(reviewPose.mode).toBe("reviewing");
+    expect(reviewPose.legSwing).not.toBe(0);
   });
 
   it("settles the done bounce after the completion moment", () => {

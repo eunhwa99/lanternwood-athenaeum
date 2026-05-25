@@ -134,7 +134,7 @@ test("renders a nonblank Pixi scene and completes a mock agent run", async ({ pa
 
   await expect(page.getByText("Orion studies the star maps for useful references")).toBeVisible();
   const activeFrameBefore = await canvas.screenshot();
-  await page.waitForTimeout(350);
+  await page.waitForTimeout(120);
   const activeFrameAfter = await canvas.screenshot();
   expect(countDifferentPixels(activeFrameBefore, activeFrameAfter), "active animation pixel delta").toBeGreaterThan(500);
 

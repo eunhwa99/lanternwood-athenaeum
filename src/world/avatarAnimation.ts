@@ -66,7 +66,11 @@ export function getAvatarPose(status: AgentStatus, elapsedSeconds: number, isTra
     };
   }
 
-  if (isTravelling || status === "moving") {
+  const travelOverlay = isTravelling || status === "moving";
+  const travelBob = Math.abs(fastWave) * 5;
+  const travelLegSwing = -fastWave * 0.55;
+
+  if (status === "moving") {
     return {
       mode: "moving",
       bob: Math.abs(fastWave) * 5,
@@ -81,27 +85,45 @@ export function getAvatarPose(status: AgentStatus, elapsedSeconds: number, isTra
 
   switch (status) {
     case "planning":
-      return { mode: "planning", bob: wave * 2, armSwing: 0.18, legSwing: 0, propAngle: wave * 0.08, effectAlpha: 0.28, effectColor, blinkScale };
+      return {
+        mode: "planning",
+        bob: travelOverlay ? travelBob : wave * 2,
+        armSwing: travelOverlay ? fastWave * 0.3 : 0.18,
+        legSwing: travelOverlay ? travelLegSwing : 0,
+        propAngle: wave * 0.08,
+        effectAlpha: 0.28,
+        effectColor,
+        blinkScale,
+      };
     case "working":
       return {
         mode: "working",
-        bob: wave * 2,
+        bob: travelOverlay ? travelBob : wave * 2,
         armSwing: fastWave * 0.22,
-        legSwing: 0,
+        legSwing: travelOverlay ? travelLegSwing : 0,
         propAngle: fastWave * 0.18,
         effectAlpha: 0.5 + Math.abs(wave) * 0.25,
         effectColor,
         blinkScale,
       };
     case "reporting":
-      return { mode: "reporting", bob: wave * 1.5, armSwing: -0.45, legSwing: 0, propAngle: -0.35, effectAlpha: 0.38, effectColor, blinkScale };
+      return {
+        mode: "reporting",
+        bob: travelOverlay ? travelBob : wave * 1.5,
+        armSwing: -0.45,
+        legSwing: travelOverlay ? travelLegSwing : 0,
+        propAngle: -0.35,
+        effectAlpha: 0.38,
+        effectColor,
+        blinkScale,
+      };
     case "waitingApproval":
     case "reviewing":
       return {
         mode: "reviewing",
-        bob: wave * 1.5,
+        bob: travelOverlay ? travelBob : wave * 1.5,
         armSwing: fastWave * 0.12,
-        legSwing: 0,
+        legSwing: travelOverlay ? travelLegSwing : 0,
         propAngle: wave * 0.2,
         effectAlpha: 0.55 + Math.abs(wave) * 0.3,
         effectColor,
