@@ -43,6 +43,22 @@ describe("mock run adapter", () => {
     expect(second.map((event) => event.taskId)).toEqual(first.map((event) => event.taskId));
   });
 
+  it("derives different task ids for different inputs", async () => {
+    const first = [];
+    const second = [];
+
+    for await (const event of mockRunAdapter.startRun("Plan my interview prep")) {
+      first.push(event);
+    }
+
+    for await (const event of mockRunAdapter.startRun("Draft a project roadmap")) {
+      second.push(event);
+    }
+
+    expect(second[0].taskId).not.toBe(first[0].taskId);
+    expect(second[0].eventId).not.toBe(first[0].eventId);
+  });
+
   it("emits terminal done events for participating specialist agents", async () => {
     const events = [];
 
