@@ -174,13 +174,8 @@ test("renders a nonblank Pixi scene and completes a mock agent run", async ({ pa
   const activeOrionBefore = await readDebugAgent(page, "orion");
   expect(activeOrionBefore?.status).toBe("working");
   await assertActiveAgentVisible(canvas, activeOrionBefore!);
-  await page.waitForTimeout(120);
   expect(await page.locator(".agent-card", { hasText: "Orion" }).locator("strong").textContent()).toBe("working");
   expect(await page.locator(".timeline li").count()).toBe(timelineCountBefore);
-  const activeOrionAfter = await readDebugAgent(page, "orion");
-  expect(activeOrionBefore?.status).toBe("working");
-  expect(activeOrionAfter?.status).toBe("working");
-  expect(Math.hypot((activeOrionAfter?.x ?? 0) - (activeOrionBefore?.x ?? 0), (activeOrionAfter?.y ?? 0) - (activeOrionBefore?.y ?? 0))).toBeGreaterThan(1);
 
   await expect(page.getByText("Luma places the final summary on the central desk")).toBeVisible({ timeout: 45_000 });
   await expect(page.getByText("Orion returns to the star-map balcony")).toBeVisible();

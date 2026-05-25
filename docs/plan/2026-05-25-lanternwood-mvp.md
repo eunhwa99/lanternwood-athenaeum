@@ -35,8 +35,10 @@ npm run typecheck
 npm test
 npm run lint
 npm run build
+npm run e2e
 ```
 
 ## Progress Log
 
 - 2026-05-25: Plan created from approved design spec.
+- 2026-05-25: Visual QA gate added after Pixi avatar animation and responsive screenshot coverage landed.

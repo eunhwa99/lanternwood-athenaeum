@@ -9,6 +9,7 @@ export type AvatarPoseMode =
   | "working"
   | "reporting"
   | "reviewing"
+  | "waitingApproval"
   | "done"
   | "failed";
 
@@ -117,7 +118,6 @@ export function getAvatarPose(status: AgentStatus, elapsedSeconds: number, isTra
         effectColor,
         blinkScale,
       };
-    case "waitingApproval":
     case "reviewing":
       return {
         mode: "reviewing",
@@ -127,6 +127,17 @@ export function getAvatarPose(status: AgentStatus, elapsedSeconds: number, isTra
         propAngle: wave * 0.2,
         effectAlpha: 0.55 + Math.abs(wave) * 0.3,
         effectColor,
+        blinkScale,
+      };
+    case "waitingApproval":
+      return {
+        mode: "waitingApproval",
+        bob: travelOverlay ? travelBob : Math.max(0, wave) * 2,
+        armSwing: travelOverlay ? fastWave * 0.18 : -0.28,
+        legSwing: travelOverlay ? travelLegSwing : 0,
+        propAngle: 0.32 + wave * 0.1,
+        effectAlpha: 0.42 + Math.abs(wave) * 0.18,
+        effectColor: 0x8fd7ff,
         blinkScale,
       };
     case "done": {

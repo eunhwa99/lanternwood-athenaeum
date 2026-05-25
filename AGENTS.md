@@ -22,5 +22,6 @@
 - `npm test`
 - `npm run lint`
 - `npm run build`
+- `npm run e2e`
 
 Do not commit secrets, `.env` files, API keys, or live OpenAI credentials.

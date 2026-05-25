@@ -43,11 +43,20 @@ describe("avatar animation", () => {
     expect(pose.effectAlpha).toBeGreaterThan(0.2);
   });
 
-  it("keeps approval waits visually active", () => {
+  it("keeps approval waits visually distinct and active", () => {
     const pose = getAvatarPose("waitingApproval", 0.5, false);
 
-    expect(pose.mode).toBe("reviewing");
+    expect(pose.mode).toBe("waitingApproval");
     expect(pose.effectAlpha).toBeGreaterThan(0.4);
+    expect(pose.effectColor).toBe(0x8fd7ff);
+  });
+
+  it("preserves approval wait identity while travelling", () => {
+    const pose = getAvatarPose("waitingApproval", 0.25, true);
+
+    expect(pose.mode).toBe("waitingApproval");
+    expect(Math.abs(pose.legSwing)).toBeGreaterThan(0);
+    expect(pose.effectColor).toBe(0x8fd7ff);
   });
 
   it("preserves reporting and review identity while travelling", () => {

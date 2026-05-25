@@ -22,6 +22,7 @@ npm run typecheck
 npm test
 npm run lint
 npm run build
+npm run e2e
 ```
 
 ## Safety
