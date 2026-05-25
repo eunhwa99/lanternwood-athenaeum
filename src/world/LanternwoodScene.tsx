@@ -38,7 +38,7 @@ function SceneContent({ state }: LanternwoodSceneProps) {
     stage.addChild(background, desk);
 
     for (const agent of Object.values(state.agents)) {
-      const sprite = createAgentSprite(agent);
+      const sprite = createAgentSprite(agent).container;
       const home = getAgentScenePosition(agent.definition);
 
       sprite.x = home.x;
