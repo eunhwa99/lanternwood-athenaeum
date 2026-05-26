@@ -6,7 +6,7 @@ Build the first runnable PixiJS-powered Living Library Dashboard using mock even
 
 ## Non-Goals
 
-- No live OpenAI API integration.
+- No API-key-backed OpenAI integration.
 - No external side effects.
 - No backend persistence.
 

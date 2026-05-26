@@ -2,7 +2,7 @@
 
 ## Summary
 
-The Lanternwood Athenaeum is a personal agent workspace with a warm living-library fantasy theme. The first version is a local web app that visualizes role-based agents as PixiJS avatars inside a floating library dashboard. It uses mock agent events first, while keeping the event contract and adapter boundary ready for a later OpenAI Agents SDK integration.
+The Lanternwood Athenaeum is a personal agent workspace with a warm living-library fantasy theme. The first version is a local web app that visualizes role-based agents as PixiJS avatars inside a floating library dashboard. It uses mock agent events first, while keeping the event contract and adapter boundary ready for a later Codex CLI integration.
 
 Display name: `The Lanternwood Athenaeum`
 Project folder and package name: `lanternwood-athenaeum`
@@ -13,12 +13,12 @@ Project folder and package name: `lanternwood-athenaeum`
 - Render a Living Library Dashboard with a central PixiJS scene and a right-side operational panel.
 - Define role-based agents with stable names, personas, visual identity, and capability boundaries.
 - Drive the world from mock event streams rather than hardcoded animation state.
-- Keep a clean adapter boundary so real Agents SDK events can replace mock events later.
+- Keep a clean adapter boundary so Codex CLI-backed events can replace mock events later.
 - Apply a repo-local harness engineering workflow adapted from `MCPContentSearch`.
 
 ## Non-Goals
 
-- Do not connect to live OpenAI APIs in the first implementation slice.
+- Do not connect to API-key-backed OpenAI services in the first implementation slice.
 - Do not send emails, modify calendars, edit files, or perform side effects.
 - Do not copy protected worlds, characters, places, or names from existing franchises.
 - Do not build a full game loop with quests, inventory, combat, or physics.
@@ -146,7 +146,7 @@ src/
     AgentStatusPanel.tsx
     Timeline.tsx
   harness/
-    agentsSdkAdapter.ts
+    codexRunAdapter.ts
     mockRunAdapter.ts
   test/
     render.tsx
@@ -235,7 +235,7 @@ Pixel-perfect PixiJS rendering is not required in unit tests. Visual behavior is
 
 - PixiJS and React state can drift if rendering owns state. Mitigation: React/event reducer is the source of truth.
 - Fantasy theme can obscure operational status. Mitigation: timeline and status panel remain visible.
-- Adding real OpenAI APIs too early can slow iteration. Mitigation: mock adapter first, real adapter later.
+- Adding API-key-backed OpenAI services too early can slow iteration. Mitigation: mock adapter first, Codex CLI live mode only after the event contract is stable.
 - Subagent workflow may be overkill for tiny changes. Mitigation: record when a change is atomic and why direct implementation is acceptable.
 - Protected IP risk from inspired themes. Mitigation: keep all names, places, visuals, and characters original.
 

@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { createAgentsSdkRunAdapter } from "./agentsSdkRunAdapter";
+import { createCodexRunAdapter } from "./codexRunAdapter";
 
 function sseEvent(data: unknown) {
   return `event: agent-event\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
-describe("agents sdk run adapter", () => {
+describe("codex run adapter", () => {
   it("streams agent events from the backend SSE response", async () => {
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -25,7 +25,7 @@ describe("agents sdk run adapter", () => {
       },
     });
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(body, { status: 200 }));
-    const adapter = createAgentsSdkRunAdapter({ endpoint: "/api/runs", fetchImpl: fetchMock });
+    const adapter = createCodexRunAdapter({ endpoint: "/api/runs", fetchImpl: fetchMock });
     const events = [];
 
     for await (const event of adapter.startRun("Draft a plan")) {
@@ -44,14 +44,13 @@ describe("agents sdk run adapter", () => {
   });
 
   it("throws a useful error when the backend is unavailable", async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response("No key", { status: 503 }));
-    const adapter = createAgentsSdkRunAdapter({ endpoint: "/api/runs", fetchImpl: fetchMock });
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response("No Codex login", { status: 503 }));
+    const adapter = createCodexRunAdapter({ endpoint: "/api/runs", fetchImpl: fetchMock });
 
     await expect(async () => {
       for await (const event of adapter.startRun("Draft a plan")) {
-        // consume stream
         expect(event).toBeDefined();
       }
-    }).rejects.toThrow("Agents SDK run failed: No key");
+    }).rejects.toThrow("Codex CLI run failed: No Codex login");
   });
 });

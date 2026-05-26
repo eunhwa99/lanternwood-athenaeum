@@ -21,7 +21,7 @@ The new scene should feel like a warm magical athenaeum where each agent is a sm
 - No external game engine.
 - No Spine/Aseprite pipeline yet.
 - No AI-generated sprite sheets in this slice.
-- No live OpenAI Agents SDK integration.
+- No live run integration changes in this animation slice.
 - No backend persistence or real agent execution.
 
 ## Visual Direction

@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["orion", "neria", "quill", "argus", "finalOutput"],
+  "properties": {
+    "orion": {
+      "type": "string"
+    },
+    "neria": {
+      "type": "string"
+    },
+    "quill": {
+      "type": "string"
+    },
+    "argus": {
+      "type": "string"
+    },
+    "finalOutput": {
+      "type": "string"
+    }
+  }
+}

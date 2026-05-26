@@ -1,7 +1,7 @@
 import type { AgentEvent } from "../events/types";
 import type { RunAdapter } from "./runAdapter";
 
-type AgentsSdkRunAdapterOptions = {
+type CodexRunAdapterOptions = {
   endpoint?: string;
   fetchImpl?: typeof fetch;
 };
@@ -26,7 +26,7 @@ function parseAgentEvent(message: string): AgentEvent | null {
   return data.length > 0 ? (JSON.parse(data) as AgentEvent) : null;
 }
 
-export function createAgentsSdkRunAdapter({ endpoint = "/api/runs", fetchImpl = fetch }: AgentsSdkRunAdapterOptions = {}): RunAdapter {
+export function createCodexRunAdapter({ endpoint = "/api/runs", fetchImpl = fetch }: CodexRunAdapterOptions = {}): RunAdapter {
   return {
     async *startRun(input: string) {
       const response = await fetchImpl(endpoint, {
@@ -38,7 +38,7 @@ export function createAgentsSdkRunAdapter({ endpoint = "/api/runs", fetchImpl = 
       });
 
       if (!response.ok || !response.body) {
-        throw new Error(`Agents SDK run failed: ${await response.text()}`);
+        throw new Error(`Codex CLI run failed: ${await response.text()}`);
       }
 
       const reader = response.body.getReader();

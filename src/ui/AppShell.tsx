@@ -3,7 +3,7 @@ import { AGENTS } from "../agents/registry";
 import type { AgentId } from "../agents/types";
 import { createInitialRunState, reduceAgentEvent } from "../events/reducer";
 import type { AgentEvent, AgentStatus, RunState } from "../events/types";
-import { createAgentsSdkRunAdapter } from "../harness/agentsSdkRunAdapter";
+import { createCodexRunAdapter } from "../harness/codexRunAdapter";
 import { createMockRunAdapter } from "../harness/mockRunAdapter";
 import type { RunAdapter } from "../harness/runAdapter";
 import { LanternwoodScene } from "../world/LanternwoodScene";
@@ -29,8 +29,8 @@ function getVisibleEventDelayMs() {
 const visibleMockRunAdapter = createMockRunAdapter({ eventDelayMs: getVisibleEventDelayMs() });
 
 function createDefaultRunAdapter() {
-  if (import.meta.env.VITE_RUN_ADAPTER === "agents") {
-    return createAgentsSdkRunAdapter();
+  if (import.meta.env.VITE_RUN_ADAPTER === "codex") {
+    return createCodexRunAdapter();
   }
 
   return visibleMockRunAdapter;

@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --strictPort",
-    "dev:agents": "VITE_RUN_ADAPTER=agents vite --host 127.0.0.1 --strictPort",
-    "dev:api": "tsx server/index.ts",
+    "dev:codex": "VITE_RUN_ADAPTER=codex vite --host 127.0.0.1 --strictPort",
+    "dev:codex-api": "tsx server/index.ts",
     "build": "npm run typecheck && vite build",
     "e2e": "playwright test",
     "e2e:update": "playwright test --update-snapshots",
@@ -16,12 +16,10 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.e2e.json"
   },
   "dependencies": {
-    "@openai/agents": "^0.11.5",
     "@pixi/react": "^8.0.3",
     "pixi.js": "^8.17.0",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "zod": "^4.4.3"
+    "react-dom": "^19.2.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",

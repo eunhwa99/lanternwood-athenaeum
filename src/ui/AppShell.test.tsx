@@ -46,7 +46,7 @@ describe("AppShell", () => {
   it("recovers the task input and shows a failed manager state when the run adapter throws", async () => {
     const failingRunAdapter: RunAdapter = {
       async *startRun() {
-        yield await Promise.reject(new Error("Agents backend unavailable"));
+        yield await Promise.reject(new Error("Codex backend unavailable"));
       },
     };
 
@@ -57,7 +57,7 @@ describe("AppShell", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Send to Luma" }));
 
-    await screen.findByText("Agents backend unavailable");
+    await screen.findByText("Codex backend unavailable");
 
     expect(screen.getByRole("button", { name: "Send to Luma" })).toBeEnabled();
     expect(screen.getByLabelText("Task request")).toBeEnabled();

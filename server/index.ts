@@ -1,11 +1,11 @@
 import { createServer, type IncomingMessage } from "node:http";
-import { createAgentsSdkEvents } from "./agentsSdkWorkflow";
+import { createCodexEvents } from "./codexWorkflow";
 import { loadDotEnvFile } from "./env";
 import { encodeAgentEvent } from "./sse";
 
 loadDotEnvFile();
 
-const port = Number(process.env.LANTERNWOOD_AGENTS_PORT ?? 8787);
+const port = Number(process.env.LANTERNWOOD_CODEX_PORT ?? 8787);
 
 async function readJsonBody(request: IncomingMessage) {
   let body = "";
@@ -62,7 +62,7 @@ const server = createServer(async (request, response) => {
     "Content-Type": "text/event-stream",
   });
 
-  for await (const event of createAgentsSdkEvents(input)) {
+  for await (const event of createCodexEvents(input)) {
     response.write(encodeAgentEvent(event));
   }
 
@@ -70,5 +70,5 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
-  console.log(`Lanternwood Agents SDK server listening on http://127.0.0.1:${port}`);
+  console.log(`Lanternwood Codex CLI server listening on http://127.0.0.1:${port}`);
 });

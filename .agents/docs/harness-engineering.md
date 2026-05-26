@@ -28,5 +28,6 @@ npm run e2e
 ## Safety
 
 - Do not commit secrets or `.env` files.
-- Do not connect live OpenAI APIs without explicit approval.
+- Do not add API-key-backed OpenAI integrations without explicit approval.
+- Codex CLI live mode is allowed only through the approved local `RunAdapter` and SSE backend path.
 - Do not add side-effecting external tools without an approval gate.

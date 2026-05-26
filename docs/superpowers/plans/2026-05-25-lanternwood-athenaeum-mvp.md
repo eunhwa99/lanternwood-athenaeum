@@ -1532,7 +1532,7 @@ Rules:
 - `src/events/` is the source of truth for runtime state.
 - `src/world/` must not own business state.
 - `src/harness/mockRunAdapter.ts` is the first run source.
-- Future OpenAI Agents SDK work must implement the same `RunAdapter` interface.
+- Future Codex CLI work must implement the same `RunAdapter` interface.
 - Side-effecting tools must require explicit approval before execution.
 ```
 
@@ -1547,7 +1547,7 @@ Current baseline:
 
 - Use mock `RunAdapter` first.
 - Keep PixiJS as a rendering projection of event-derived state.
-- Add live OpenAI Agents SDK integration only after the mock event contract is stable.
+- Add live Codex CLI integration only after the mock event contract is stable.
 ```
 
 - [ ] **Step 3: Create harness and workflow docs**
@@ -1584,7 +1584,7 @@ npm run build
 ## Safety
 
 - Do not commit secrets or `.env` files.
-- Do not connect live OpenAI APIs without explicit approval.
+- Do not add API-key-backed OpenAI integrations without explicit approval.
 - Do not add side-effecting external tools without an approval gate.
 ```
 
@@ -1628,7 +1628,7 @@ Build the first runnable PixiJS-powered Living Library Dashboard using mock even
 
 ## Non-Goals
 
-- No live OpenAI API integration.
+- No API-key-backed OpenAI integration.
 - No external side effects.
 - No backend persistence.
 

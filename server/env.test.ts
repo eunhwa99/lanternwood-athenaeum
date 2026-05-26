@@ -9,15 +9,14 @@ describe("server env loader", () => {
     const directory = await mkdtemp(join(tmpdir(), "lanternwood-env-"));
     const envPath = join(directory, ".env");
 
-    await writeFile(envPath, "OPENAI_API_KEY=from-file\nLANTERNWOOD_AGENTS_PORT=9191\nEXISTING=from-file\n");
+    await writeFile(envPath, "LANTERNWOOD_CODEX_PORT=9191\nEXISTING=from-file\n");
 
     const target = { EXISTING: "from-shell" };
     loadDotEnvFile(envPath, target);
 
     expect(target).toEqual({
       EXISTING: "from-shell",
-      LANTERNWOOD_AGENTS_PORT: "9191",
-      OPENAI_API_KEY: "from-file",
+      LANTERNWOOD_CODEX_PORT: "9191",
     });
   });
 });
