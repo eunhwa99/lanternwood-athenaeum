@@ -38,3 +38,4 @@ npm run e2e
 - 2026-05-25: Character avatars, background, status animation, screenshot/pixel QA, and responsive QA implemented.
 - 2026-05-25: Review findings routed back into animation identity, E2E stability, and durable harness docs.
 - 2026-05-26: Add a Final Output surface between the animated scene and side panel so Luma's synthesized result is visible outside the timeline.
+- 2026-05-26: Add an OpenAI Agents SDK adapter path with a local SSE backend while keeping mock mode as the safe default.

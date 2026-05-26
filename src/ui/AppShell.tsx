@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
 import { AGENTS } from "../agents/registry";
+import type { AgentId } from "../agents/types";
 import { createInitialRunState, reduceAgentEvent } from "../events/reducer";
-import type { RunState } from "../events/types";
+import type { AgentEvent, AgentStatus, RunState } from "../events/types";
+import { createAgentsSdkRunAdapter } from "../harness/agentsSdkRunAdapter";
 import { createMockRunAdapter } from "../harness/mockRunAdapter";
 import type { RunAdapter } from "../harness/runAdapter";
 import { LanternwoodScene } from "../world/LanternwoodScene";
@@ -26,24 +28,109 @@ function getVisibleEventDelayMs() {
 
 const visibleMockRunAdapter = createMockRunAdapter({ eventDelayMs: getVisibleEventDelayMs() });
 
+function createDefaultRunAdapter() {
+  if (import.meta.env.VITE_RUN_ADAPTER === "agents") {
+    return createAgentsSdkRunAdapter();
+  }
+
+  return visibleMockRunAdapter;
+}
+
+const defaultRunAdapter = createDefaultRunAdapter();
+
 type AppShellProps = {
   runAdapter?: RunAdapter;
 };
 
-export function AppShell({ runAdapter = visibleMockRunAdapter }: AppShellProps) {
+function stableTaskId(input: string): string {
+  const bytes = new TextEncoder().encode(input);
+  const encoded = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+
+  return `task-${encoded || "empty"}`;
+}
+
+function createClientEvent(
+  taskId: string,
+  index: number,
+  agentId: AgentId,
+  type: AgentEvent["type"],
+  message: string,
+): AgentEvent {
+  return {
+    agentId,
+    eventId: `${taskId}-client-${index}`,
+    message,
+    taskId,
+    timestamp: new Date().toISOString(),
+    type,
+  };
+}
+
+function messageFromError(error: unknown) {
+  return error instanceof Error ? error.message : "Run adapter failed";
+}
+
+function isUnfinishedActiveStatus(status: AgentStatus) {
+  return !["done", "failed", "idle", "reporting"].includes(status);
+}
+
+export function AppShell({ runAdapter = defaultRunAdapter }: AppShellProps) {
   const initialState = useMemo(() => createInitialRunState(AGENTS), []);
   const [runState, setRunState] = useState<RunState>(initialState);
   const [isRunning, setIsRunning] = useState(false);
 
-  async function startMockRun(prompt: string) {
+  async function startRun(prompt: string) {
     setRunState(createInitialRunState(AGENTS));
     setIsRunning(true);
 
-    for await (const event of runAdapter.startRun(prompt)) {
-      setRunState((current) => reduceAgentEvent(current, event));
-    }
+    let taskId = stableTaskId(prompt);
+    let sawTaskCreated = false;
 
-    setIsRunning(false);
+    try {
+      for await (const event of runAdapter.startRun(prompt)) {
+        if (event.type === "task.created") {
+          taskId = event.taskId;
+          sawTaskCreated = true;
+        }
+
+        setRunState((current) => reduceAgentEvent(current, event));
+      }
+    } catch (error) {
+      setRunState((current) => {
+        const withTask = sawTaskCreated
+          ? current
+          : reduceAgentEvent(current, createClientEvent(taskId, current.timeline.length + 1, "luma", "task.created", prompt));
+        const failedSpecialists = AGENTS.filter(
+          (agent) => agent.id !== "luma" && isUnfinishedActiveStatus(withTask.agents[agent.id].status),
+        ).reduce(
+          (state, agent, offset) =>
+            reduceAgentEvent(
+              state,
+              createClientEvent(
+                taskId,
+                withTask.timeline.length + offset + 1,
+                agent.id,
+                "agent.failed",
+                `${agent.displayName}'s route closed after the stream failed`,
+              ),
+            ),
+          withTask,
+        );
+
+        return reduceAgentEvent(
+          failedSpecialists,
+          createClientEvent(
+            taskId,
+            failedSpecialists.timeline.length + 1,
+            "luma",
+            "agent.failed",
+            messageFromError(error),
+          ),
+        );
+      });
+    } finally {
+      setIsRunning(false);
+    }
   }
 
   return (
@@ -52,7 +139,7 @@ export function AppShell({ runAdapter = visibleMockRunAdapter }: AppShellProps) 
         <div className="scene-frame">
           <LanternwoodScene state={runState} />
         </div>
-        <TaskInput disabled={isRunning} onSubmit={startMockRun} />
+        <TaskInput disabled={isRunning} onSubmit={startRun} />
         <FinalOutputPanel output={runState.finalOutput} />
       </section>
       <aside className="side-panel">
