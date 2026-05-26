@@ -6,6 +6,7 @@ import { createMockRunAdapter } from "../harness/mockRunAdapter";
 import type { RunAdapter } from "../harness/runAdapter";
 import { LanternwoodScene } from "../world/LanternwoodScene";
 import { AgentStatusPanel } from "./AgentStatusPanel";
+import { FinalOutputPanel } from "./FinalOutputPanel";
 import { TaskInput } from "./TaskInput";
 import { Timeline } from "./Timeline";
 
@@ -52,6 +53,7 @@ export function AppShell({ runAdapter = visibleMockRunAdapter }: AppShellProps) 
           <LanternwoodScene state={runState} />
         </div>
         <TaskInput disabled={isRunning} onSubmit={startMockRun} />
+        <FinalOutputPanel output={runState.finalOutput} />
       </section>
       <aside className="side-panel">
         <header>

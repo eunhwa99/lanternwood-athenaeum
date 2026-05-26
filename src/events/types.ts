@@ -47,5 +47,6 @@ export type CurrentTask = {
 export type RunState = {
   currentTask: CurrentTask | null;
   agents: Record<AgentId, AgentRuntimeState>;
+  finalOutput: string | null;
   timeline: AgentEvent[];
 };

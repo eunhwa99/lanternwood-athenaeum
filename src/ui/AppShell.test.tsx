@@ -29,6 +29,10 @@ describe("AppShell", () => {
     expect(screen.getByText("Neria closes the archive ledger")).toBeInTheDocument();
     expect(screen.getByText("Argus lowers the review lantern")).toBeInTheDocument();
     expect(screen.getByText("Luma raises the blue approval lantern")).toBeInTheDocument();
+    const finalOutput = screen.getByRole("region", { name: "Final output" });
+    expect(finalOutput).toHaveAttribute("aria-live", "polite");
+    expect(finalOutput).toHaveAttribute("aria-atomic", "true");
+    expect(finalOutput).toHaveTextContent("Here is the focused plan synthesized from Orion, Neria, and Argus.");
 
     await waitFor(() => {
       expect(screen.getAllByText("done")).toHaveLength(4);

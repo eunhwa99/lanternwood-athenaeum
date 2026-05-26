@@ -24,6 +24,7 @@ function event(
   agentId: AgentEvent["agentId"],
   type: AgentEvent["type"],
   message: string,
+  payload?: AgentEvent["payload"],
 ): AgentEvent {
   return {
     eventId: `${taskId}-evt-${index}`,
@@ -32,6 +33,7 @@ function event(
     type,
     message,
     timestamp: new Date(Date.UTC(2026, 4, 25, 0, 0, index)).toISOString(),
+    payload,
   };
 }
 
@@ -54,7 +56,9 @@ export function createMockRunAdapter(options: MockRunAdapterOptions = {}): RunAd
         event(taskId, 10, "orion", "agent.done", "Orion returns to the star-map balcony"),
         event(taskId, 11, "neria", "agent.done", "Neria closes the archive ledger"),
         event(taskId, 12, "argus", "agent.done", "Argus lowers the review lantern"),
-        event(taskId, 13, "luma", "agent.done", "Luma places the final summary on the central desk"),
+        event(taskId, 13, "luma", "agent.done", "Luma places the final summary on the central desk", {
+          finalOutput: "Here is the focused plan synthesized from Orion, Neria, and Argus.",
+        }),
       ];
 
       for (const item of events) {

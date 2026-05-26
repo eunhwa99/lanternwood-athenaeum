@@ -26,12 +26,20 @@ export function createInitialRunState(agents: AgentDefinition[]): RunState {
         },
       ]),
     ) as RunState["agents"],
+    finalOutput: null,
     timeline: [],
   };
 }
 
 export function reduceAgentEvent(state: RunState, event: AgentEvent): RunState {
   const nextStatus = eventStatus[event.type] ?? state.agents[event.agentId].status;
+  const isTerminalManagerEvent = event.type === "agent.done" && event.agentId === "luma";
+  const finalOutput =
+    event.type === "task.created"
+      ? null
+      : isTerminalManagerEvent && typeof event.payload?.finalOutput === "string"
+        ? event.payload.finalOutput
+        : state.finalOutput;
   const currentTask =
     event.type === "task.created"
       ? { taskId: event.taskId, prompt: event.message }
@@ -47,6 +55,7 @@ export function reduceAgentEvent(state: RunState, event: AgentEvent): RunState {
         lastMessage: event.message,
       },
     },
+    finalOutput,
     timeline: [...state.timeline, event],
   };
 }

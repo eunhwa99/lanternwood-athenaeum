@@ -185,6 +185,7 @@ test("renders a nonblank Pixi scene and completes a mock agent run", async ({ pa
 
   expect(frameBox).not.toBeNull();
   expect(canvasBox).not.toBeNull();
+  expect(frameBox!.width).toBeGreaterThan(700);
   expect(canvasBox!.width).toBeLessThanOrEqual(frameBox!.width + 1);
   expect(canvasBox!.height).toBeLessThanOrEqual(frameBox!.height + 1);
 
@@ -264,4 +265,51 @@ test("fits the Pixi scene inside the visible frame on mobile", async ({ page }) 
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
     .toBeLessThanOrEqual(390);
+});
+
+test("keeps the final output beside the scene without clipping on wide screens", async ({ page }) => {
+  await page.setViewportSize({ width: 1700, height: 900 });
+  await page.goto("/");
+
+  const stageBox = await page.locator(".library-stage").boundingBox();
+  const sceneBox = await page.locator(".scene-frame").boundingBox();
+  const outputBox = await page.locator(".final-output-panel").boundingBox();
+  const sideBox = await page.locator(".side-panel").boundingBox();
+  const outputStyle = await page.locator(".final-output-text").evaluate((element) => {
+    const style = window.getComputedStyle(element);
+
+    return {
+      overflowWrap: style.overflowWrap,
+      whiteSpace: style.whiteSpace,
+    };
+  });
+
+  expect(stageBox).not.toBeNull();
+  expect(sceneBox).not.toBeNull();
+  expect(outputBox).not.toBeNull();
+  expect(sideBox).not.toBeNull();
+  expect(outputStyle.whiteSpace).toBe("pre-wrap");
+  expect(outputStyle.overflowWrap).toBe("anywhere");
+  expect(outputBox!.x).toBeGreaterThan(sceneBox!.x + sceneBox!.width);
+  expect(outputBox!.x + outputBox!.width).toBeLessThanOrEqual(sideBox!.x);
+  expect(stageBox!.x + stageBox!.width).toBeLessThanOrEqual(sideBox!.x);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
+    .toBeLessThanOrEqual(1700);
+});
+
+test("keeps the normal desktop scene large before output is ready", async ({ page }) => {
+  await page.setViewportSize({ width: 1699, height: 900 });
+  await page.goto("/");
+
+  const sceneBox = await page.locator(".scene-frame").boundingBox();
+  const outputBox = await page.locator(".final-output-panel").boundingBox();
+
+  expect(sceneBox).not.toBeNull();
+  expect(outputBox).not.toBeNull();
+  expect(sceneBox!.width).toBeGreaterThan(700);
+  expect(outputBox!.y).toBeGreaterThan(sceneBox!.y + sceneBox!.height);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
+    .toBeLessThanOrEqual(1699);
 });

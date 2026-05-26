@@ -37,4 +37,71 @@ describe("event reducer", () => {
     expect(working.agents.orion.status).toBe("working");
     expect(working.timeline).toHaveLength(2);
   });
+
+  it("stores synthesized final output from the terminal manager event", () => {
+    const initial = createInitialRunState(AGENTS);
+    const done = reduceAgentEvent(initial, {
+      ...baseEvent,
+      agentId: "luma",
+      type: "agent.done",
+      message: "Luma places the final summary on the central desk",
+      payload: {
+        finalOutput: "Here is the focused plan synthesized from Orion, Neria, and Argus.",
+      },
+    });
+
+    expect(done.finalOutput).toBe("Here is the focused plan synthesized from Orion, Neria, and Argus.");
+  });
+
+  it("ignores final output payloads from non-terminal specialist events", () => {
+    const initial = createInitialRunState(AGENTS);
+    const working = reduceAgentEvent(initial, {
+      ...baseEvent,
+      agentId: "orion",
+      type: "agent.working",
+      message: "Orion is checking references",
+      payload: {
+        finalOutput: "This should not be treated as the synthesized answer.",
+      },
+    });
+
+    expect(working.finalOutput).toBeNull();
+  });
+
+  it("ignores final output payloads from specialist done events", () => {
+    const initial = createInitialRunState(AGENTS);
+    const done = reduceAgentEvent(initial, {
+      ...baseEvent,
+      agentId: "orion",
+      type: "agent.done",
+      message: "Orion returns to the star-map balcony",
+      payload: {
+        finalOutput: "Only Luma's terminal synthesis should populate the final output.",
+      },
+    });
+
+    expect(done.finalOutput).toBeNull();
+  });
+
+  it("clears final output when a new task starts", () => {
+    const initial = createInitialRunState(AGENTS);
+    const completed = reduceAgentEvent(initial, {
+      ...baseEvent,
+      agentId: "luma",
+      type: "agent.done",
+      message: "Luma places the final summary on the central desk",
+      payload: {
+        finalOutput: "Previous synthesis",
+      },
+    });
+    const nextTask = reduceAgentEvent(completed, {
+      ...baseEvent,
+      eventId: "evt-2",
+      agentId: "luma",
+      type: "task.created",
+      message: "Prepare a new answer",
+    });
+
+    expect(nextTask.finalOutput).toBeNull();
+  });
 });
