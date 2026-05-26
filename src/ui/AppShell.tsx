@@ -9,6 +9,7 @@ import type { RunAdapter } from "../harness/runAdapter";
 import { LanternwoodScene } from "../world/LanternwoodScene";
 import { AgentStatusPanel } from "./AgentStatusPanel";
 import { FinalOutputPanel } from "./FinalOutputPanel";
+import { LiveRunInspector } from "./LiveRunInspector";
 import { TaskInput } from "./TaskInput";
 import { Timeline } from "./Timeline";
 
@@ -36,11 +37,13 @@ function createDefaultRunAdapter() {
   return visibleMockRunAdapter;
 }
 
-const defaultRunAdapter = createDefaultRunAdapter();
-
 type AppShellProps = {
   runAdapter?: RunAdapter;
+  runMode?: "codex" | "mock";
 };
+
+const defaultRunAdapter = createDefaultRunAdapter();
+const defaultRunMode = import.meta.env.VITE_RUN_ADAPTER === "codex" ? "codex" : "mock";
 
 function stableTaskId(input: string): string {
   const bytes = new TextEncoder().encode(input);
@@ -55,11 +58,13 @@ function createClientEvent(
   agentId: AgentId,
   type: AgentEvent["type"],
   message: string,
+  payload?: AgentEvent["payload"],
 ): AgentEvent {
   return {
     agentId,
     eventId: `${taskId}-client-${index}`,
     message,
+    payload,
     taskId,
     timestamp: new Date().toISOString(),
     type,
@@ -74,7 +79,29 @@ function isUnfinishedActiveStatus(status: AgentStatus) {
   return !["done", "failed", "idle", "reporting"].includes(status);
 }
 
-export function AppShell({ runAdapter = defaultRunAdapter }: AppShellProps) {
+function clientDiagnostics(runMode: "codex" | "mock") {
+  if (runMode === "mock") {
+    return undefined;
+  }
+
+  return {
+    backend: "unavailable",
+    cliCommand: "codex exec",
+    codexStatus: "failed",
+    model: "Codex CLI backend unavailable (model unresolved)",
+    runMode: "codex",
+  };
+}
+
+function clientFailureDiagnostics(runMode: "codex" | "mock", hasServerDiagnostics: boolean) {
+  if (runMode === "mock") {
+    return undefined;
+  }
+
+  return hasServerDiagnostics ? { codexStatus: "failed" } : clientDiagnostics(runMode);
+}
+
+export function AppShell({ runAdapter = defaultRunAdapter, runMode = defaultRunMode }: AppShellProps) {
   const initialState = useMemo(() => createInitialRunState(AGENTS), []);
   const [runState, setRunState] = useState<RunState>(initialState);
   const [isRunning, setIsRunning] = useState(false);
@@ -99,7 +126,10 @@ export function AppShell({ runAdapter = defaultRunAdapter }: AppShellProps) {
       setRunState((current) => {
         const withTask = sawTaskCreated
           ? current
-          : reduceAgentEvent(current, createClientEvent(taskId, current.timeline.length + 1, "luma", "task.created", prompt));
+          : reduceAgentEvent(
+              current,
+              createClientEvent(taskId, current.timeline.length + 1, "luma", "task.created", prompt, clientDiagnostics(runMode)),
+            );
         const failedSpecialists = AGENTS.filter(
           (agent) => agent.id !== "luma" && isUnfinishedActiveStatus(withTask.agents[agent.id].status),
         ).reduce(
@@ -125,6 +155,7 @@ export function AppShell({ runAdapter = defaultRunAdapter }: AppShellProps) {
             "luma",
             "agent.failed",
             messageFromError(error),
+            clientFailureDiagnostics(runMode, sawTaskCreated),
           ),
         );
       });
@@ -140,6 +171,7 @@ export function AppShell({ runAdapter = defaultRunAdapter }: AppShellProps) {
           <LanternwoodScene state={runState} />
         </div>
         <TaskInput disabled={isRunning} onSubmit={startRun} />
+        <LiveRunInspector runMode={runMode} state={runState} />
         <FinalOutputPanel output={runState.finalOutput} />
       </section>
       <aside className="side-panel">

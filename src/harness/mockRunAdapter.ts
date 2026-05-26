@@ -46,18 +46,29 @@ export function createMockRunAdapter(options: MockRunAdapterOptions = {}): RunAd
       const events: AgentEvent[] = [
         event(taskId, 1, "luma", "task.created", input),
         event(taskId, 2, "luma", "agent.planning", "Luma is arranging the reading lamps"),
-        event(taskId, 3, "luma", "agent.delegated", "Luma sends Orion and Neria into the stacks"),
+        event(taskId, 3, "luma", "agent.delegated", "Luma sends Orion, Neria, Quill, and Argus into the stacks"),
         event(taskId, 4, "orion", "agent.working", "Orion studies the star maps for useful references"),
-        event(taskId, 5, "orion", "agent.reporting", "Orion returns with a concise research brief"),
+        event(taskId, 5, "orion", "agent.reporting", "Orion returns with a concise research brief", {
+          report: "Research brief: focus the plan around the highest-risk milestone first.",
+        }),
         event(taskId, 6, "neria", "agent.working", "Neria checks the archive for stable preferences"),
-        event(taskId, 7, "neria", "agent.reporting", "Neria finds relevant memory notes"),
-        event(taskId, 8, "argus", "agent.reviewing", "Argus checks the answer for risk and gaps"),
-        event(taskId, 9, "luma", "approval.requested", "Luma raises the blue approval lantern"),
-        event(taskId, 10, "orion", "agent.done", "Orion returns to the star-map balcony"),
-        event(taskId, 11, "neria", "agent.done", "Neria closes the archive ledger"),
-        event(taskId, 12, "argus", "agent.done", "Argus lowers the review lantern"),
-        event(taskId, 13, "luma", "agent.done", "Luma places the final summary on the central desk", {
-          finalOutput: "Here is the focused plan synthesized from Orion, Neria, and Argus.",
+        event(taskId, 7, "neria", "agent.reporting", "Neria finds relevant memory notes", {
+          report: "Memory note: keep recommendations concrete, repo-grounded, and action-oriented.",
+        }),
+        event(taskId, 8, "quill", "agent.working", "Quill turns findings into a draft"),
+        event(taskId, 9, "quill", "agent.reporting", "Quill returns a concise draft", {
+          report: "Draft note: turn the findings into a short milestone plan.",
+        }),
+        event(taskId, 10, "argus", "agent.reviewing", "Argus checks the answer for risk and gaps", {
+          report: "Review note: verify scope, risk, and completion criteria before handoff.",
+        }),
+        event(taskId, 11, "luma", "approval.requested", "Luma raises the blue approval lantern"),
+        event(taskId, 12, "orion", "agent.done", "Orion returns to the star-map balcony"),
+        event(taskId, 13, "neria", "agent.done", "Neria closes the archive ledger"),
+        event(taskId, 14, "quill", "agent.done", "Quill shelves the illuminated draft"),
+        event(taskId, 15, "argus", "agent.done", "Argus lowers the review lantern"),
+        event(taskId, 16, "luma", "agent.done", "Luma places the final summary on the central desk", {
+          finalOutput: "Here is the focused plan synthesized from Orion, Neria, Quill, and Argus.",
         }),
       ];
 

@@ -62,11 +62,26 @@ const server = createServer(async (request, response) => {
     "Content-Type": "text/event-stream",
   });
 
-  for await (const event of createCodexEvents(input)) {
-    response.write(encodeAgentEvent(event));
-  }
+  const abortController = new AbortController();
+  response.on("close", () => {
+    if (!response.writableEnded) {
+      abortController.abort();
+    }
+  });
 
-  response.end();
+  try {
+    for await (const event of createCodexEvents(input, undefined, { signal: abortController.signal })) {
+      if (abortController.signal.aborted) {
+        break;
+      }
+
+      response.write(encodeAgentEvent(event));
+    }
+  } finally {
+    if (!response.writableEnded && !response.destroyed) {
+      response.end();
+    }
+  }
 });
 
 server.listen(port, "127.0.0.1", () => {

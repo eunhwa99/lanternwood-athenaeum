@@ -17,15 +17,19 @@ describe("mock run adapter", () => {
       "agent.reporting",
       "agent.working",
       "agent.reporting",
+      "agent.working",
+      "agent.reporting",
       "agent.reviewing",
       "approval.requested",
       "agent.done",
       "agent.done",
       "agent.done",
       "agent.done",
+      "agent.done",
     ]);
     expect(events[0].message).toBe("Plan my interview prep");
-    expect(events[8].message).toBe("Luma raises the blue approval lantern");
+    expect(events[9].message).toBe("Argus checks the answer for risk and gaps");
+    expect(events[10].message).toBe("Luma raises the blue approval lantern");
     expect(new Set(events.map((event) => event.taskId)).size).toBe(1);
   });
 
@@ -88,7 +92,7 @@ describe("mock run adapter", () => {
       events
         .filter((event) => event.type === "agent.done")
         .map((event) => event.agentId),
-    ).toEqual(["orion", "neria", "argus", "luma"]);
+    ).toEqual(["orion", "neria", "quill", "argus", "luma"]);
   });
 
   it("can delay event delivery for visible UI animation", async () => {
