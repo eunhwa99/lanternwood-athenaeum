@@ -1,16 +1,35 @@
 import type { AgentDefinition, AgentId } from "../agents/types";
 
+export const AGENT_IDS = ["luma", "orion", "neria", "quill", "argus"] as const;
+
 export type AgentEventType =
   | "task.created"
   | "agent.planning"
   | "agent.delegated"
+  | "agent.prompted"
   | "agent.moving"
   | "agent.working"
   | "agent.reporting"
   | "agent.reviewing"
   | "agent.done"
   | "agent.failed"
-  | "approval.requested";
+  | "approval.requested"
+  | "permission.reviewed";
+
+export const AGENT_EVENT_TYPES = [
+  "task.created",
+  "agent.planning",
+  "agent.delegated",
+  "agent.prompted",
+  "agent.moving",
+  "agent.working",
+  "agent.reporting",
+  "agent.reviewing",
+  "agent.done",
+  "agent.failed",
+  "approval.requested",
+  "permission.reviewed",
+] as const satisfies readonly AgentEventType[];
 
 export type AgentStatus =
   | "idle"
@@ -23,15 +42,53 @@ export type AgentStatus =
   | "done"
   | "failed";
 
-export type AgentEvent = {
+export type PreviousRunContext = {
+  prompt: string;
+  taskId: string;
+  finalOutput: string;
+  delegatedAgents: string[];
+  timeline: string[];
+};
+
+type BaseAgentEvent<TType extends AgentEventType> = {
   eventId: string;
   taskId: string;
   agentId: AgentId;
-  type: AgentEventType;
+  type: TType;
   message: string;
   timestamp: string;
-  payload?: Record<string, unknown>;
 };
+
+export type AgentPromptedPayload = {
+  senderAgentId: AgentId;
+  recipientAgentId: AgentId;
+  prompt: string;
+  promptExcerpt: string;
+  speechBubble: string;
+} & Record<string, unknown>;
+
+export type AgentReportingPayload = {
+  report: string;
+  reportExcerpt?: string;
+  rawResponse?: string;
+  speechBubble?: string;
+} & Record<string, unknown>;
+
+export type PermissionReviewedPayload = {
+  requestId: string;
+  decision: "approve" | "deny" | "escalate";
+  reason: string;
+  action: string;
+  path?: string;
+} & Record<string, unknown>;
+
+export type AgentEvent =
+  | (BaseAgentEvent<"agent.prompted"> & { payload: AgentPromptedPayload })
+  | (BaseAgentEvent<"agent.reporting"> & { payload: AgentReportingPayload })
+  | (BaseAgentEvent<"permission.reviewed"> & { payload: PermissionReviewedPayload })
+  | (BaseAgentEvent<Exclude<AgentEventType, "agent.prompted" | "agent.reporting" | "permission.reviewed">> & {
+      payload?: Record<string, unknown>;
+    });
 
 export type AgentRuntimeState = {
   definition: AgentDefinition;

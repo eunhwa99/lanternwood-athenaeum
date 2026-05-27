@@ -1,20 +1,36 @@
 import { createServer, type IncomingMessage } from "node:http";
+import type { PreviousRunContext } from "../src/events/types";
+import { validateAgentEvent } from "../src/events/validation";
+import { createTaskId } from "../src/harness/taskIds";
 import { createCodexEvents } from "./codexWorkflow";
 import { loadDotEnvFile } from "./env";
+import { validatePreviousRun } from "./requestValidation";
 import { encodeAgentEvent } from "./sse";
 
 loadDotEnvFile();
 
 const port = Number(process.env.LANTERNWOOD_CODEX_PORT ?? 8787);
+const healthToken = process.env.LANTERNWOOD_CODEX_HEALTH_TOKEN;
+const maxBodyBytes = 128 * 1024;
 
 async function readJsonBody(request: IncomingMessage) {
-  let body = "";
+  const chunks: Buffer[] = [];
+  let size = 0;
 
   for await (const chunk of request) {
-    body += chunk;
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.byteLength;
+
+    if (size > maxBodyBytes) {
+      throw new Error("Request body too large");
+    }
+
+    chunks.push(buffer);
   }
 
-  return JSON.parse(body) as { input?: unknown };
+  const body = Buffer.concat(chunks).toString("utf8");
+
+  return JSON.parse(body) as { input?: unknown; previousRun?: unknown };
 }
 
 const server = createServer(async (request, response) => {
@@ -30,7 +46,7 @@ const server = createServer(async (request, response) => {
 
   if (request.method === "GET" && request.url === "/api/health") {
     response.writeHead(200, { "Content-Type": "application/json" });
-    response.end(JSON.stringify({ ok: true }));
+    response.end(JSON.stringify({ ok: true, token: healthToken }));
     return;
   }
 
@@ -41,12 +57,14 @@ const server = createServer(async (request, response) => {
   }
 
   let input = "";
+  let previousRun: PreviousRunContext | undefined;
   try {
     const body = await readJsonBody(request);
     input = typeof body.input === "string" ? body.input.trim() : "";
+    previousRun = validatePreviousRun(body.previousRun);
   } catch {
     response.writeHead(400, { "Content-Type": "text/plain" });
-    response.end("Invalid JSON body");
+    response.end("Invalid JSON body or previousRun");
     return;
   }
 
@@ -70,12 +88,36 @@ const server = createServer(async (request, response) => {
   });
 
   try {
-    for await (const event of createCodexEvents(input, undefined, { signal: abortController.signal })) {
+    for await (const event of createCodexEvents(input, undefined, { previousRun, signal: abortController.signal })) {
       if (abortController.signal.aborted) {
         break;
       }
 
-      response.write(encodeAgentEvent(event));
+      response.write(encodeAgentEvent(validateAgentEvent(event, "Invalid AgentEvent from Codex workflow")));
+    }
+  } catch (error) {
+    if (!abortController.signal.aborted && !response.destroyed) {
+      response.write(
+        encodeAgentEvent(
+          validateAgentEvent(
+            {
+              agentId: "luma",
+              eventId: `${createTaskId(input)}-server-error`,
+              message: error instanceof Error ? error.message : "Codex workflow stream failed",
+              payload: {
+                backend: "connected",
+                cliCommand: "codex exec",
+                codexStatus: "failed",
+                runMode: "codex",
+              },
+              taskId: createTaskId(input),
+              timestamp: new Date().toISOString(),
+              type: "agent.failed",
+            },
+            "Invalid AgentEvent from Codex workflow",
+          ),
+        ),
+      );
     }
   } finally {
     if (!response.writableEnded && !response.destroyed) {

@@ -1,0 +1,63 @@
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { createDefaultCoordinatorPolicy, type CoordinatorPolicy } from "./coordinatorPolicy";
+
+const PERSONA_IDS = ["luma", "orion", "neria", "quill", "argus", "coordinator"] as const;
+
+export type GlobalAgents = {
+  agentsHome: string;
+  automationPolicy: CoordinatorPolicy & Record<string, unknown>;
+  personas: Partial<Record<(typeof PERSONA_IDS)[number], string>>;
+};
+
+type LoadGlobalAgentsOptions = {
+  agentsHome?: string;
+  homeDirectory?: string;
+};
+
+function readOptionalText(path: string) {
+  if (!existsSync(path)) {
+    return undefined;
+  }
+
+  return readFileSync(path, "utf8").trim();
+}
+
+function readOptionalJson(path: string): Record<string, unknown> | undefined {
+  const text = readOptionalText(path);
+
+  if (!text) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function loadGlobalAgents(options: LoadGlobalAgentsOptions = {}): Promise<GlobalAgents> {
+  const homeDirectory = options.homeDirectory ?? homedir();
+  const configuredAgentsHome = options.agentsHome ?? process.env.LANTERNWOOD_AGENTS_HOME?.trim();
+  const agentsHome = configuredAgentsHome || join(homeDirectory, ".agents");
+  const personas: GlobalAgents["personas"] = {};
+
+  for (const personaId of PERSONA_IDS) {
+    const persona = readOptionalText(join(agentsHome, "personas", `${personaId}.md`));
+
+    if (persona) {
+      personas[personaId] = persona;
+    }
+  }
+
+  return {
+    agentsHome,
+    automationPolicy: {
+      ...createDefaultCoordinatorPolicy(homeDirectory),
+      ...readOptionalJson(join(agentsHome, "automation_policy.json")),
+    },
+    personas,
+  };
+}

@@ -6,27 +6,68 @@ import { renderApp } from "../test/render";
 import { AppShell } from "./AppShell";
 
 vi.mock("../world/LanternwoodScene", () => ({
-  LanternwoodScene: ({ state }: { state: { agents: { luma: { status: string } }; timeline: unknown[] } }) => (
+  LanternwoodScene: ({
+    runEpoch,
+    state,
+  }: {
+    runEpoch: number;
+    state: { agents: { luma: { status: string } }; timeline: unknown[] };
+  }) => (
     <div data-testid="lanternwood-scene">
       <span>scene-luma-{state.agents.luma.status}</span>
       <span>scene-events-{state.timeline.length}</span>
+      <span>scene-run-{runEpoch}</span>
     </div>
   ),
 }));
 
 describe("AppShell", () => {
-  it("shows idle Codex diagnostics before the first Codex run starts", () => {
+  it("shows compact Codex diagnostics without the old visible timeline", () => {
     renderApp(<AppShell runAdapter={mockRunAdapter} runMode="codex" />);
 
     const inspector = screen.getByRole("region", { name: "Live run inspector" });
     expect(inspector).toHaveTextContent(/Mode\s*codex/);
-    expect(inspector).toHaveTextContent(/Backend\s*not connected/);
-    expect(inspector).toHaveTextContent(/CLI\s*codex exec/);
-    expect(inspector).toHaveTextContent(/Model\s*awaiting Codex backend/);
     expect(inspector).toHaveTextContent(/Codex\s*idle/);
+    expect(inspector).toHaveTextContent(/Events\s*0/);
+    expect(screen.queryByRole("region", { name: "Event timeline" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Final output" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Agents summary")).toHaveTextContent("Luma: idle");
+    expect(screen.getByText("Luma: idle")).toHaveStyle({ "--agent-color": "#f2c66d" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Open raw Codex details" }));
+    expect(screen.getByRole("dialog", { name: "Run details" })).toHaveTextContent(
+      "No raw response captured for this run.",
+    );
   });
 
-  it("runs the mock agent flow from task input through panels and timeline", async () => {
+  it("surfaces Codex backend diagnostics when the live adapter fails before streaming", async () => {
+    const failingRunAdapter: RunAdapter = {
+      startRun: () =>
+        ({
+          [Symbol.asyncIterator]() {
+            return {
+              next: async () => {
+                throw new Error("Codex CLI run failed: backend unavailable");
+              },
+            };
+          },
+        }),
+    };
+
+    renderApp(<AppShell runAdapter={failingRunAdapter} runMode="codex" />);
+
+    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Draft a focused project plan" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send to Luma" }));
+
+    await waitFor(() => {
+      const inspector = screen.getByRole("region", { name: "Live run inspector" });
+      expect(inspector).toHaveTextContent(/Backend\s*unavailable/);
+      expect(inspector).toHaveTextContent(/CLI\s*codex exec/);
+      expect(inspector).toHaveTextContent(/Model\s*Codex CLI backend unavailable/);
+    });
+  });
+
+  it("runs the mock flow through compact cards and opens final/log details", async () => {
     renderApp(<AppShell runAdapter={mockRunAdapter} />);
 
     fireEvent.change(screen.getByLabelText("Task request"), {
@@ -34,167 +75,110 @@ describe("AppShell", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Send to Luma" }));
 
-    await screen.findByText("Luma places the final summary on the central desk");
+    await screen.findAllByText("Here is the focused plan synthesized from Orion, Neria, Quill, and Argus.");
 
-    expect(screen.getAllByText("Draft a focused project plan").length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText("Orion returns to the star-map balcony")).toBeInTheDocument();
-    expect(screen.getByText("Neria closes the archive ledger")).toBeInTheDocument();
-    expect(screen.getByText("Argus lowers the review lantern")).toBeInTheDocument();
-    expect(screen.getByText("Luma raises the blue approval lantern")).toBeInTheDocument();
-    const finalOutput = screen.getByRole("region", { name: "Final output" });
-    expect(finalOutput).toHaveAttribute("aria-live", "polite");
-    expect(finalOutput).toHaveAttribute("aria-atomic", "true");
-    expect(finalOutput).toHaveTextContent("Here is the focused plan synthesized from Orion, Neria, Quill, and Argus.");
+    expect(screen.getByText("scene-events-21")).toBeInTheDocument();
+    expect(screen.getByLabelText("Agents summary")).toHaveTextContent("Argus: done");
+    expect(screen.getByRole("region", { name: "Live run inspector" })).toHaveTextContent(
+      "Research brief: focus the plan around the highest-risk milestone first.",
+    );
+    expect(screen.getByRole("button", { name: "View Orion details" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "View Orion details" }));
+    expect(screen.getByRole("dialog", { name: "Run details" })).toHaveTextContent("Orion Details");
+    expect(screen.getByRole("dialog", { name: "Run details" })).toHaveTextContent(
+      "Research brief: focus the plan around the highest-risk milestone first.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
 
-    await waitFor(() => {
-      expect(screen.getByRole("region", { name: "Agent status" }).querySelectorAll("strong")).toHaveLength(5);
-    });
-    expect(screen.getByRole("region", { name: "Agent status" })).toHaveTextContent("Luma");
-    const agentStatus = screen.getByRole("region", { name: "Agent status" });
-    expect(screen.getByText("scene-luma-done")).toBeInTheDocument();
-    expect(screen.getByText("scene-events-16")).toBeInTheDocument();
-    expect(Array.from(agentStatus.querySelectorAll("strong")).map((item) => item.textContent)).toEqual([
-      "done",
-      "done",
-      "done",
-      "done",
-      "done",
-    ]);
-    expect(screen.getByRole("region", { name: "Live run inspector" })).toHaveTextContent("Draft note: turn the findings into a short milestone plan.");
-    expect(screen.getByRole("region", { name: "Live run inspector" })).toHaveTextContent("done");
+    fireEvent.click(screen.getByRole("button", { name: "Open full final output" }));
+    expect(screen.getByRole("dialog", { name: "Run details" })).toHaveTextContent(
+      "Here is the focused plan synthesized from Orion, Neria, Quill, and Argus.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Open run log" }));
+    expect(screen.getByRole("dialog", { name: "Run details" })).toHaveTextContent(
+      "Luma -> Orion: Orion, focus the plan around the highest-risk milestone first.",
+    );
   });
 
-  it("recovers the task input and shows a failed manager state when the run adapter throws", async () => {
-    const failingRunAdapter: RunAdapter = {
-      async *startRun() {
-        yield await Promise.reject(new Error("Codex backend unavailable"));
-      },
-    };
-
-    renderApp(<AppShell runAdapter={failingRunAdapter} />);
-
-    fireEvent.change(screen.getByLabelText("Task request"), {
-      target: { value: "Draft a focused project plan" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Send to Luma" }));
-
-    await waitFor(() => {
-      expect(screen.getAllByText("Codex backend unavailable").length).toBeGreaterThan(0);
-    });
-
-    expect(screen.getByRole("button", { name: "Send to Luma" })).toBeEnabled();
-    expect(screen.getByLabelText("Task request")).toBeEnabled();
-    expect(screen.getByText("scene-luma-failed")).toBeInTheDocument();
-  });
-
-  it("keeps Codex diagnostics visible when the Codex backend fails before streaming events", async () => {
-    const failingRunAdapter: RunAdapter = {
-      async *startRun() {
-        yield await Promise.reject(new Error("Codex backend unavailable"));
-      },
-    };
-
-    renderApp(<AppShell runAdapter={failingRunAdapter} runMode="codex" />);
-
-    fireEvent.change(screen.getByLabelText("Task request"), {
-      target: { value: "Draft a focused project plan" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Send to Luma" }));
-
-    await waitFor(() => {
-      expect(screen.getAllByText("Codex backend unavailable").length).toBeGreaterThan(0);
-    });
-
-    const inspector = screen.getByRole("region", { name: "Live run inspector" });
-    expect(inspector).toHaveTextContent(/Mode\s*codex/);
-    expect(inspector).toHaveTextContent(/Backend\s*unavailable/);
-    expect(inspector).toHaveTextContent(/CLI\s*codex exec/);
-    expect(inspector).toHaveTextContent(/Model\s*Codex CLI backend unavailable \(model unresolved\)/);
-    expect(inspector).toHaveTextContent(/Codex\s*failed/);
-  });
-
-  it("does not overwrite server Codex diagnostics when a connected stream fails", async () => {
-    const connectedThenFailingRunAdapter: RunAdapter = {
-      async *startRun() {
+  it("stores successful run context and forwards it to the next run", async () => {
+    const seenPreviousRuns: unknown[] = [];
+    const contextRunAdapter: RunAdapter = {
+      async *startRun(input, options) {
+        seenPreviousRuns.push(options?.previousRun);
         yield {
           agentId: "luma",
-          eventId: "task-1-client-1",
-          message: "Draft a focused project plan",
-          payload: {
-            backend: "connected",
-            cliCommand: "codex exec",
-            codexStatus: "streaming",
-            model: "gpt-5.3-codex",
-            runMode: "codex",
-          },
-          taskId: "task-1",
-          timestamp: "2026-05-26T00:00:00.000Z",
-          type: "task.created",
-        };
-        throw new Error("Stream interrupted");
-      },
-    };
-
-    renderApp(<AppShell runAdapter={connectedThenFailingRunAdapter} runMode="codex" />);
-
-    fireEvent.change(screen.getByLabelText("Task request"), {
-      target: { value: "Draft a focused project plan" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Send to Luma" }));
-
-    await waitFor(() => {
-      expect(screen.getAllByText("Stream interrupted").length).toBeGreaterThan(0);
-    });
-
-    const inspector = screen.getByRole("region", { name: "Live run inspector" });
-    expect(inspector).toHaveTextContent(/Mode\s*codex/);
-    expect(inspector).toHaveTextContent(/Backend\s*connected/);
-    expect(inspector).toHaveTextContent(/CLI\s*codex exec/);
-    expect(inspector).toHaveTextContent(/Model\s*gpt-5\.3-codex/);
-    expect(inspector).toHaveTextContent(/Codex\s*failed/);
-  });
-
-  it("marks in-progress specialists failed when the stream throws mid-run", async () => {
-    const midStreamFailingRunAdapter: RunAdapter = {
-      async *startRun() {
-        yield {
-          agentId: "luma",
-          eventId: "task-1-client-1",
-          message: "Draft a focused project plan",
-          taskId: "task-1",
+          eventId: `${input}-1`,
+          message: input,
+          taskId: `task-${input}`,
           timestamp: "2026-05-26T00:00:00.000Z",
           type: "task.created",
         };
         yield {
           agentId: "orion",
-          eventId: "task-1-client-2",
-          message: "Orion is working",
-          taskId: "task-1",
+          eventId: `${input}-2`,
+          message: "Orion returns research findings",
+          payload: { report: "Research complete" },
+          taskId: `task-${input}`,
           timestamp: "2026-05-26T00:00:01.000Z",
-          type: "agent.working",
+          type: "agent.reporting",
         };
-        throw new Error("Stream interrupted");
+        yield {
+          agentId: "argus",
+          eventId: `${input}-3`,
+          message: "Argus returns review notes",
+          payload: { report: "Review complete" },
+          taskId: `task-${input}`,
+          timestamp: "2026-05-26T00:00:02.000Z",
+          type: "agent.reporting",
+        };
+        yield {
+          agentId: "luma",
+          eventId: `${input}-4`,
+          message: "Luma places the final summary on the central desk",
+          payload: { finalOutput: `Final for ${input}` },
+          taskId: `task-${input}`,
+          timestamp: "2026-05-26T00:00:03.000Z",
+          type: "agent.done",
+        };
       },
     };
 
-    renderApp(<AppShell runAdapter={midStreamFailingRunAdapter} />);
+    renderApp(<AppShell runAdapter={contextRunAdapter} />);
 
-    fireEvent.change(screen.getByLabelText("Task request"), {
-      target: { value: "Draft a focused project plan" },
-    });
+    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "First prompt" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send to Luma" }));
+    await screen.findAllByText("Final for First prompt");
+
+    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Who worked on that?" } });
     fireEvent.click(screen.getByRole("button", { name: "Send to Luma" }));
 
     await waitFor(() => {
-      expect(screen.getAllByText("Stream interrupted").length).toBeGreaterThan(0);
+      expect(seenPreviousRuns[1]).toMatchObject({
+        delegatedAgents: ["Orion", "Argus"],
+        finalOutput: "Final for First prompt",
+        prompt: "First prompt",
+        taskId: "task-First prompt",
+      });
     });
-
-    expect(screen.getByRole("button", { name: "Send to Luma" })).toBeEnabled();
-    expect(screen.getByText("scene-luma-failed")).toBeInTheDocument();
-    expect(screen.getAllByText("Orion's route closed after the stream failed").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Stream interrupted").length).toBeGreaterThan(0);
   });
 
-  it("preserves already reported specialists when the stream throws before Luma finishes", async () => {
+  it("increments the scene run epoch even when the same prompt is submitted again", async () => {
+    renderApp(<AppShell runAdapter={mockRunAdapter} />);
+
+    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Repeatable prompt" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send to Luma" }));
+    await screen.findAllByText("Here is the focused plan synthesized from Orion, Neria, Quill, and Argus.");
+    expect(screen.getByText("scene-run-1")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Repeatable prompt" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send to Luma" }));
+
+    await waitFor(() => expect(screen.getByText("scene-run-2")).toBeInTheDocument());
+  });
+
+  it("marks active specialists failed when a stream throws while preserving reported output", async () => {
     const reportingThenFailingRunAdapter: RunAdapter = {
       async *startRun() {
         yield {
@@ -214,40 +198,128 @@ describe("AppShell", () => {
           timestamp: "2026-05-26T00:00:01.000Z",
           type: "agent.reporting",
         };
+        yield {
+          agentId: "neria",
+          eventId: "task-1-client-3",
+          message: "Neria is working",
+          taskId: "task-1",
+          timestamp: "2026-05-26T00:00:02.000Z",
+          type: "agent.working",
+        };
         throw new Error("Stream interrupted");
       },
     };
 
     renderApp(<AppShell runAdapter={reportingThenFailingRunAdapter} />);
 
-    fireEvent.change(screen.getByLabelText("Task request"), {
-      target: { value: "Draft a focused project plan" },
-    });
+    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Draft a focused project plan" } });
     fireEvent.click(screen.getByRole("button", { name: "Send to Luma" }));
 
     await waitFor(() => {
       expect(screen.getAllByText("Stream interrupted").length).toBeGreaterThan(0);
     });
-
-    expect(screen.getByText("Orion returns research findings")).toBeInTheDocument();
+    expect(screen.getByText("Research complete")).toBeInTheDocument();
     expect(screen.queryByText("Orion's route closed after the stream failed")).not.toBeInTheDocument();
-    expect(screen.getByText("scene-luma-failed")).toBeInTheDocument();
+    expect(screen.getAllByText("Route closed after the stream failed").length).toBeGreaterThan(0);
   });
 
-  it("shows per-agent outputs and Codex run diagnostics from streamed events", async () => {
+  it("marks unfinished specialists failed when the backend sends terminal Luma failure", async () => {
+    const terminalFailureRunAdapter: RunAdapter = {
+      async *startRun() {
+        yield {
+          agentId: "luma",
+          eventId: "task-1-client-1",
+          message: "Draft a focused project plan",
+          taskId: "task-1",
+          timestamp: "2026-05-26T00:00:00.000Z",
+          type: "task.created",
+        };
+        yield {
+          agentId: "orion",
+          eventId: "task-1-client-2",
+          message: "Orion returns research findings",
+          payload: { report: "Research complete" },
+          taskId: "task-1",
+          timestamp: "2026-05-26T00:00:01.000Z",
+          type: "agent.reporting",
+        };
+        yield {
+          agentId: "neria",
+          eventId: "task-1-client-3",
+          message: "Neria is working",
+          taskId: "task-1",
+          timestamp: "2026-05-26T00:00:02.000Z",
+          type: "agent.working",
+        };
+        yield {
+          agentId: "luma",
+          eventId: "task-1-client-4",
+          message: "Codex workflow stream failed",
+          taskId: "task-1",
+          timestamp: "2026-05-26T00:00:03.000Z",
+          type: "agent.failed",
+        };
+      },
+    };
+
+    renderApp(<AppShell runAdapter={terminalFailureRunAdapter} />);
+
+    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Draft a focused project plan" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send to Luma" }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Route closed after Luma reported a run failure").length).toBeGreaterThan(0);
+    });
+    expect(screen.getByText("Research complete")).toBeInTheDocument();
+  });
+
+  it("lets the user stop an in-flight run through the adapter abort signal", async () => {
+    let seenSignal: AbortSignal | undefined;
+    const stoppingRunAdapter: RunAdapter = {
+      async *startRun(_input, options) {
+        seenSignal = options?.signal;
+        yield {
+          agentId: "luma",
+          eventId: "task-stop-1",
+          message: "Draft a focused project plan",
+          taskId: "task-stop",
+          timestamp: "2026-05-26T00:00:00.000Z",
+          type: "task.created",
+        };
+        yield {
+          agentId: "orion",
+          eventId: "task-stop-2",
+          message: "Orion is working",
+          taskId: "task-stop",
+          timestamp: "2026-05-26T00:00:01.000Z",
+          type: "agent.working",
+        };
+        await new Promise<void>((resolve) => options?.signal?.addEventListener("abort", () => resolve(), { once: true }));
+        throw new Error("Run aborted");
+      },
+    };
+
+    renderApp(<AppShell runAdapter={stoppingRunAdapter} />);
+
+    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Draft a focused project plan" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send to Luma" }));
+
+    await screen.findByText("Orion is working");
+    fireEvent.click(screen.getByRole("button", { name: "Stop run" }));
+
+    await waitFor(() => {
+      expect(seenSignal?.aborted).toBe(true);
+      expect(screen.getAllByText("Run aborted").length).toBeGreaterThan(0);
+    });
+  });
+
+  it("opens raw Codex details from streamed diagnostics", async () => {
     const diagnosticRunAdapter: RunAdapter = {
       async *startRun() {
         yield {
           agentId: "luma",
           eventId: "task-1-client-1",
           message: "Draft a focused project plan",
-          payload: {
-            backend: "connected",
-            cliCommand: "codex exec --output-schema server/codexOutputSchema.json --output-last-message <temp>",
-            codexStatus: "calling",
-            model: "gpt-5.3-codex",
-            runMode: "codex",
-          },
           taskId: "task-1",
           timestamp: "2026-05-26T00:00:00.000Z",
           type: "task.created",
@@ -255,179 +327,28 @@ describe("AppShell", () => {
         yield {
           agentId: "orion",
           eventId: "task-1-client-2",
-          message: "Orion Codex CLI is streaming output",
-          payload: {
-            codexStatus: "streaming",
-            progress: "Orion Codex CLI is streaming output.",
-            rawChunk: "{\"event\":\"turn.started\"}\n",
-          },
-          taskId: "task-1",
-          timestamp: "2026-05-26T00:00:01.000Z",
-          type: "agent.working",
-        };
-        yield {
-          agentId: "orion",
-          eventId: "task-1-client-3",
           message: "Orion returns research findings",
           payload: {
-            rawResponse: "Orion raw final",
+            rawResponse: "Raw /Users/eunhwa/private/output",
             report: "Research output from Orion",
           },
           taskId: "task-1",
-          timestamp: "2026-05-26T00:00:02.000Z",
+          timestamp: "2026-05-26T00:00:01.000Z",
           type: "agent.reporting",
-        };
-        yield {
-          agentId: "neria",
-          eventId: "task-1-client-4",
-          message: "Neria returns memory context",
-          payload: {
-            rawResponse: "Neria raw final",
-            report: "Memory output from Neria",
-          },
-          taskId: "task-1",
-          timestamp: "2026-05-26T00:00:03.000Z",
-          type: "agent.reporting",
-        };
-        yield {
-          agentId: "luma",
-          eventId: "task-1-client-5",
-          message: "Luma places the final summary on the central desk",
-          payload: {
-            codexStatus: "completed",
-            finalOutput: "Final synthesis",
-            rawResponse: "Luma raw final",
-          },
-          taskId: "task-1",
-          timestamp: "2026-05-26T00:00:04.000Z",
-          type: "agent.done",
         };
       },
     };
 
-    renderApp(<AppShell runAdapter={diagnosticRunAdapter} />);
+    renderApp(<AppShell runAdapter={diagnosticRunAdapter} runMode="codex" />);
 
-    fireEvent.change(screen.getByLabelText("Task request"), {
-      target: { value: "Draft a focused project plan" },
-    });
+    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Draft a focused project plan" } });
     fireEvent.click(screen.getByRole("button", { name: "Send to Luma" }));
 
     await screen.findByText("Research output from Orion");
+    fireEvent.click(screen.getByRole("button", { name: "Open raw Codex details" }));
 
-    const inspector = screen.getByRole("region", { name: "Live run inspector" });
-    expect(inspector).toHaveTextContent(/Mode\s*codex/);
-    expect(inspector).toHaveTextContent(/Backend\s*connected/);
-    expect(inspector).toHaveTextContent(/CLI\s*codex exec --output-schema server\/codexOutputSchema\.json --output-last-message <temp>/);
-    expect(inspector).toHaveTextContent(/Model\s*gpt-5\.3-codex/);
-    expect(inspector).toHaveTextContent(/Codex\s*completed/);
-    expect(inspector).toHaveTextContent("Orion");
-    expect(inspector).toHaveTextContent("Research output from Orion");
-    expect(inspector).toHaveTextContent("Codex Raw Response");
-    expect(inspector).toHaveTextContent("\"event\":\"turn.started\"");
-    expect(inspector).toHaveTextContent("Orion raw final");
-    expect(inspector).toHaveTextContent("Neria raw final");
-    expect(inspector).toHaveTextContent("Luma raw final");
-  });
-
-  it("does not show specialist completion as global Codex completion while Luma is still running", async () => {
-    const activeSpecialistRunAdapter: RunAdapter = {
-      async *startRun() {
-        yield {
-          agentId: "luma",
-          eventId: "task-1-client-1",
-          message: "Draft a focused project plan",
-          payload: {
-            backend: "connected",
-            cliCommand: "codex exec",
-            codexStatus: "calling",
-            model: "gpt-5.3-codex",
-            runMode: "codex",
-          },
-          taskId: "task-1",
-          timestamp: "2026-05-26T00:00:00.000Z",
-          type: "task.created",
-        };
-        yield {
-          agentId: "orion",
-          eventId: "task-1-client-2",
-          message: "Orion returns research findings",
-          payload: {
-            codexStatus: "completed",
-            report: "Research output from Orion",
-          },
-          taskId: "task-1",
-          timestamp: "2026-05-26T00:00:01.000Z",
-          type: "agent.reporting",
-        };
-      },
-    };
-
-    renderApp(<AppShell runAdapter={activeSpecialistRunAdapter} runMode="codex" />);
-
-    fireEvent.change(screen.getByLabelText("Task request"), {
-      target: { value: "Draft a focused project plan" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Send to Luma" }));
-
-    const inspector = await screen.findByRole("region", { name: "Live run inspector" });
-    await waitFor(() => {
-      expect(inspector).toHaveTextContent(/Codex\s*running/);
-    });
-  });
-
-  it("shows a failed specialist's latest failure message instead of stale progress", async () => {
-    const failingSpecialistRunAdapter: RunAdapter = {
-      async *startRun() {
-        yield {
-          agentId: "luma",
-          eventId: "task-1-client-1",
-          message: "Draft a focused project plan",
-          payload: {
-            backend: "connected",
-            cliCommand: "codex exec",
-            codexStatus: "calling",
-            model: "gpt-5.3-codex",
-            runMode: "codex",
-          },
-          taskId: "task-1",
-          timestamp: "2026-05-26T00:00:00.000Z",
-          type: "task.created",
-        };
-        yield {
-          agentId: "orion",
-          eventId: "task-1-client-2",
-          message: "Orion Codex CLI is streaming output",
-          payload: {
-            progress: "Orion Codex CLI is streaming output.",
-            rawChunk: "{\"event\":\"turn.started\"}\n",
-          },
-          taskId: "task-1",
-          timestamp: "2026-05-26T00:00:01.000Z",
-          type: "agent.working",
-        };
-        yield {
-          agentId: "orion",
-          eventId: "task-1-client-3",
-          message: "Orion route failed with Codex timeout",
-          taskId: "task-1",
-          timestamp: "2026-05-26T00:00:02.000Z",
-          type: "agent.failed",
-        };
-      },
-    };
-
-    renderApp(<AppShell runAdapter={failingSpecialistRunAdapter} runMode="codex" />);
-
-    fireEvent.change(screen.getByLabelText("Task request"), {
-      target: { value: "Draft a focused project plan" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Send to Luma" }));
-
-    await waitFor(() => {
-      expect(screen.getAllByText("Orion route failed with Codex timeout").length).toBeGreaterThan(0);
-    });
-    expect(screen.getByRole("region", { name: "Live run inspector" })).not.toHaveTextContent(
-      /Live status: Orion Codex CLI is streaming output/,
-    );
+    const drawer = screen.getByRole("dialog", { name: "Run details" });
+    expect(drawer).toHaveTextContent("[redacted-path]");
+    expect(drawer).not.toHaveTextContent("/Users/eunhwa/private");
   });
 });

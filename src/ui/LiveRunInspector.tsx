@@ -1,85 +1,44 @@
 import { AGENTS } from "../agents/registry";
 import type { AgentId } from "../agents/types";
-import type { AgentEvent, RunState } from "../events/types";
+import type { RunState } from "../events/types";
+import { previewText, type RunDetailsTab } from "./runDetails";
 
 type LiveRunInspectorProps = {
+  onOpenDetails?: (tab: RunDetailsTab, agentId?: AgentId) => void;
   runMode?: "codex" | "mock";
   state: RunState;
 };
 
-type RunDiagnostics = {
-  backend?: string;
-  cliCommand?: string;
-  codexStatus?: string;
-  model?: string;
-  rawChunk?: string;
-  rawResponse?: string;
-  runMode?: string;
-  stderrChunk?: string;
-};
+function latestAgentOutput(state: RunState, agentId: AgentId): string | null {
+  if (state.agents[agentId].status === "failed") {
+    return previewText(state.agents[agentId].lastMessage);
+  }
 
-function stringPayload(event: AgentEvent, key: keyof RunDiagnostics): string | undefined {
-  const value = event.payload?.[key];
+  for (let index = state.timeline.length - 1; index >= 0; index -= 1) {
+    const event = state.timeline[index];
 
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-function rawPayload(event: AgentEvent, key: "rawChunk" | "stderrChunk" | "rawResponse"): string | undefined {
-  const value = event.payload?.[key];
-
-  return typeof value === "string" ? value : undefined;
-}
-
-function agentDisplayName(agentId: AgentId) {
-  return AGENTS.find((agent) => agent.id === agentId)?.displayName ?? agentId;
-}
-
-function collectDiagnostics(events: AgentEvent[], runMode: "codex" | "mock"): Required<RunDiagnostics> {
-  const diagnostics: Required<RunDiagnostics> = {
-    backend: runMode === "codex" ? "not connected" : "not connected",
-    cliCommand: runMode === "codex" ? "codex exec" : "none",
-    codexStatus: "idle",
-    model: runMode === "codex" ? "awaiting Codex backend" : "mock",
-    rawChunk: "",
-    rawResponse: "",
-    runMode,
-    stderrChunk: "",
-  };
-  const rawParts: string[] = [];
-  const finalRawResponses: string[] = [];
-
-  for (const event of events) {
-    diagnostics.backend = stringPayload(event, "backend") ?? diagnostics.backend;
-    diagnostics.cliCommand = stringPayload(event, "cliCommand") ?? diagnostics.cliCommand;
-    diagnostics.codexStatus = stringPayload(event, "codexStatus") ?? diagnostics.codexStatus;
-    diagnostics.model = stringPayload(event, "model") ?? diagnostics.model;
-    diagnostics.runMode = stringPayload(event, "runMode") ?? diagnostics.runMode;
-
-    const rawChunk = rawPayload(event, "rawChunk");
-    const stderrChunk = rawPayload(event, "stderrChunk");
-    const explicitRawResponse = rawPayload(event, "rawResponse");
-
-    if (rawChunk) {
-      rawParts.push(rawChunk);
+    if (event.agentId !== agentId) {
+      continue;
     }
 
-    if (stderrChunk) {
-      rawParts.push(stderrChunk);
+    const payload = event.payload as Record<string, unknown> | undefined;
+    const report = payload?.report;
+    if (typeof report === "string" && report.trim()) {
+      return previewText(report);
     }
 
-    if (explicitRawResponse) {
-      finalRawResponses.push(`--- ${agentDisplayName(event.agentId)} final response ---\n${explicitRawResponse}`);
+    const progress = payload?.progress;
+    if (typeof progress === "string" && progress.trim()) {
+      return previewText(progress);
     }
   }
 
-  diagnostics.rawResponse = [...(rawParts.length > 0 ? [rawParts.join("")] : []), ...finalRawResponses].join("\n");
-
-  return diagnostics;
+  return null;
 }
 
-function globalCodexStatus(state: RunState, runMode: "codex" | "mock", fallback: string) {
+function globalCodexStatus(state: RunState, runMode: "codex" | "mock") {
   if (runMode === "mock") {
-    return fallback;
+    return state.currentTask ? state.agents.luma.status : "idle";
   }
 
   if (state.agents.luma.status === "failed") {
@@ -90,88 +49,29 @@ function globalCodexStatus(state: RunState, runMode: "codex" | "mock", fallback:
     return "completed";
   }
 
-  if (state.currentTask) {
-    if (!state.timeline.some((event) => event.payload?.runMode === "codex" || event.payload?.cliCommand === "codex exec")) {
-      return fallback;
-    }
-
-    return fallback === "completed" || fallback === "failed" ? "running" : fallback;
-  }
-
-  return fallback;
+  return state.currentTask ? "running" : "idle";
 }
 
-function latestAgentOutput(events: AgentEvent[], agentId: AgentId): string | null {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
+function latestDiagnostics(state: RunState) {
+  for (let index = state.timeline.length - 1; index >= 0; index -= 1) {
+    const payload = state.timeline[index].payload as Record<string, unknown> | undefined;
 
-    if (event.agentId !== agentId) {
-      continue;
-    }
-
-    const report = event.payload?.report;
-    if (typeof report === "string" && report.trim()) {
-      return report;
-    }
-
-    const progress = event.payload?.progress;
-    if (typeof progress === "string" && progress.trim()) {
-      return progress;
+    if (payload?.backend || payload?.cliCommand || payload?.model) {
+      return {
+        backend: typeof payload.backend === "string" ? payload.backend : "unknown",
+        cliCommand: typeof payload.cliCommand === "string" ? payload.cliCommand : "codex exec",
+        model: typeof payload.model === "string" ? payload.model : "unresolved",
+      };
     }
   }
 
   return null;
 }
 
-function agentRawResponse(events: AgentEvent[], agentId: AgentId): string {
-  const rawParts: string[] = [];
-  let finalRawResponse = "";
-
-  for (const event of events) {
-    if (event.agentId !== agentId) {
-      continue;
-    }
-
-    const rawChunk = rawPayload(event, "rawChunk");
-    const stderrChunk = rawPayload(event, "stderrChunk");
-    const explicitRawResponse = rawPayload(event, "rawResponse");
-
-    if (rawChunk) {
-      rawParts.push(rawChunk);
-    }
-
-    if (stderrChunk) {
-      rawParts.push(stderrChunk);
-    }
-
-    if (explicitRawResponse) {
-      finalRawResponse = explicitRawResponse;
-    }
-  }
-
-  if (rawParts.length > 0 && finalRawResponse) {
-    return `${rawParts.join("")}\n--- Codex final response ---\n${finalRawResponse}`;
-  }
-
-  return finalRawResponse || rawParts.join("");
-}
-
-function pendingOutputText(state: RunState, agentId: AgentId) {
-  const agentState = state.agents[agentId];
-
-  if (agentState.status === "idle") {
-    return "Awaiting output";
-  }
-
-  return `Live status: ${agentState.lastMessage}. Output appears after a verified report.`;
-}
-
-export function LiveRunInspector({ runMode = "mock", state }: LiveRunInspectorProps) {
-  const diagnostics = collectDiagnostics(state.timeline, runMode);
-  const effectiveRunMode = diagnostics.runMode === "codex" ? "codex" : runMode;
-  const codexStatus = globalCodexStatus(state, effectiveRunMode, diagnostics.codexStatus);
-  const lumaStatus = state.agents.luma.status;
-  const traceStatus = lumaStatus === "done" || lumaStatus === "failed" ? lumaStatus : state.currentTask ? "running trace" : "idle";
+export function LiveRunInspector({ onOpenDetails, runMode = "mock", state }: LiveRunInspectorProps) {
+  const diagnostics = latestDiagnostics(state);
+  const permissionReviews = state.timeline.filter((event) => event.type === "permission.reviewed");
+  const traceStatus = state.agents.luma.status === "done" || state.agents.luma.status === "failed" ? state.agents.luma.status : state.currentTask ? "running trace" : "idle";
 
   return (
     <section className="live-run-inspector" aria-label="Live run inspector" aria-live="polite">
@@ -182,55 +82,75 @@ export function LiveRunInspector({ runMode = "mock", state }: LiveRunInspectorPr
       <dl className="run-diagnostics">
         <div>
           <dt>Mode</dt>
-          <dd>{diagnostics.runMode}</dd>
-        </div>
-        <div>
-          <dt>Backend</dt>
-          <dd>{diagnostics.backend}</dd>
-        </div>
-        <div>
-          <dt>CLI</dt>
-          <dd>{diagnostics.cliCommand}</dd>
-        </div>
-        <div>
-          <dt>Model</dt>
-          <dd>{diagnostics.model}</dd>
+          <dd>{runMode}</dd>
         </div>
         <div>
           <dt>Codex</dt>
-          <dd>{codexStatus}</dd>
+          <dd>{globalCodexStatus(state, runMode)}</dd>
         </div>
+        <div>
+          <dt>Events</dt>
+          <dd>{state.timeline.length}</dd>
+        </div>
+        {diagnostics ? (
+          <>
+            <div>
+              <dt>Backend</dt>
+              <dd>{diagnostics.backend}</dd>
+            </div>
+            <div>
+              <dt>CLI</dt>
+              <dd>{diagnostics.cliCommand}</dd>
+            </div>
+            <div>
+              <dt>Model</dt>
+              <dd>{diagnostics.model}</dd>
+            </div>
+          </>
+        ) : null}
       </dl>
+
+      {permissionReviews.length > 0 ? (
+        <section className="permission-panel" aria-label="Coordinator permissions">
+          <h3>Coordinator Permissions</h3>
+          {permissionReviews.map((event) => (
+            <p key={event.eventId}>
+              {event.payload.decision}: {event.payload.action}
+            </p>
+          ))}
+        </section>
+      ) : null}
 
       <div className="agent-output-grid">
         {AGENTS.map((agent) => {
-          const rawOutput = agentRawResponse(state.timeline, agent.id);
           const output =
-            state.agents[agent.id].status === "failed"
-              ? state.agents[agent.id].lastMessage
-              : (agent.id === "luma" ? state.finalOutput ?? latestAgentOutput(state.timeline, agent.id) : latestAgentOutput(state.timeline, agent.id)) ??
-                pendingOutputText(state, agent.id);
+            agent.id === "luma"
+              ? previewText(state.finalOutput) || latestAgentOutput(state, agent.id) || previewText(state.agents[agent.id].lastMessage)
+              : latestAgentOutput(state, agent.id) || previewText(state.agents[agent.id].lastMessage);
 
           return (
             <article className="agent-output-card" key={agent.id}>
-              <h3>{agent.displayName}</h3>
-              <span>{state.agents[agent.id].status}</span>
+              <div className="agent-output-card-header">
+                <h3>{agent.displayName}</h3>
+                <span>{state.agents[agent.id].status}</span>
+              </div>
               <p>{output}</p>
-              {rawOutput ? (
-                <details className="agent-raw-response">
-                  <summary>{agent.displayName} raw Codex</summary>
-                  <pre>{rawOutput}</pre>
-                </details>
-              ) : null}
+              <button onClick={() => onOpenDetails?.(agent.id === "luma" ? "final" : "reports", agent.id)} type="button">
+                View {agent.displayName} details
+              </button>
             </article>
           );
         })}
       </div>
 
-      <details className="raw-response" open={Boolean(diagnostics.rawResponse)}>
-        <summary>Codex Raw Response</summary>
-        <pre>{diagnostics.rawResponse || "No raw Codex response yet."}</pre>
-      </details>
+      <div className="inspector-actions">
+        <button onClick={() => onOpenDetails?.("raw")} type="button">
+          Open raw Codex details
+        </button>
+        <button onClick={() => onOpenDetails?.("log")} type="button">
+          Open run log
+        </button>
+      </div>
     </section>
   );
 }

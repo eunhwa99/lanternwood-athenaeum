@@ -13,13 +13,18 @@ describe("mock run adapter", () => {
       "task.created",
       "agent.planning",
       "agent.delegated",
+      "agent.prompted",
       "agent.working",
       "agent.reporting",
+      "agent.prompted",
       "agent.working",
       "agent.reporting",
+      "agent.prompted",
       "agent.working",
       "agent.reporting",
+      "agent.prompted",
       "agent.reviewing",
+      "agent.reporting",
       "approval.requested",
       "agent.done",
       "agent.done",
@@ -28,9 +33,18 @@ describe("mock run adapter", () => {
       "agent.done",
     ]);
     expect(events[0].message).toBe("Plan my interview prep");
-    expect(events[9].message).toBe("Argus checks the answer for risk and gaps");
-    expect(events[10].message).toBe("Luma raises the blue approval lantern");
+    expect(
+      events.find((event) => event.type === "agent.prompted" && event.payload?.recipientAgentId === "argus")?.payload,
+    ).toMatchObject({
+      recipientAgentId: "argus",
+      senderAgentId: "luma",
+      speechBubble: "Argus, review the plan for risk and completion criteria.",
+    });
+    expect(events[13].message).toBe("Argus checks the answer for risk and gaps");
+    expect(events[14].message).toBe("Argus returns review notes");
+    expect(events[15].message).toBe("Luma raises the blue approval lantern");
     expect(new Set(events.map((event) => event.taskId)).size).toBe(1);
+    expect(events[0].taskId.length).toBeLessThanOrEqual(32);
   });
 
   it("emits the same event ids for the same input", async () => {

@@ -4,6 +4,7 @@ import type { AgentEvent, AgentStatus, RunState } from "./types";
 const eventStatus: Partial<Record<AgentEvent["type"], AgentStatus>> = {
   "agent.planning": "planning",
   "agent.delegated": "planning",
+  "agent.prompted": "moving",
   "agent.moving": "moving",
   "agent.working": "working",
   "agent.reporting": "reporting",
@@ -11,6 +12,7 @@ const eventStatus: Partial<Record<AgentEvent["type"], AgentStatus>> = {
   "agent.done": "done",
   "agent.failed": "failed",
   "approval.requested": "waitingApproval",
+  "permission.reviewed": "reviewing",
 };
 
 export function createInitialRunState(agents: AgentDefinition[]): RunState {
@@ -32,7 +34,7 @@ export function createInitialRunState(agents: AgentDefinition[]): RunState {
 }
 
 export function reduceAgentEvent(state: RunState, event: AgentEvent): RunState {
-  const nextStatus = eventStatus[event.type] ?? state.agents[event.agentId].status;
+  const nextStatus = eventStatus[event.type] ?? state.agents[event.agentId as AgentId].status;
   const isTerminalManagerEvent = event.type === "agent.done" && event.agentId === "luma";
   const finalOutput =
     event.type === "task.created"
