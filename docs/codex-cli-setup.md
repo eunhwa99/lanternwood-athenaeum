@@ -9,7 +9,13 @@ codex login
 codex doctor
 ```
 
-Run the backend and frontend in separate terminals:
+Run both the backend and frontend together:
+
+```sh
+npm run dev:all
+```
+
+Or run the backend and frontend in separate terminals:
 
 ```sh
 npm run dev:codex-api

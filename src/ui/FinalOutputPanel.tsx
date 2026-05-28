@@ -1,12 +1,26 @@
 type FinalOutputPanelProps = {
+  onOpenFull?: () => void;
   output: string | null;
 };
 
-export function FinalOutputPanel({ output }: FinalOutputPanelProps) {
+function previewOutput(output: string | null) {
+  if (!output) {
+    return "Awaiting Luma's synthesis.";
+  }
+
+  return output.length > 320 ? `${output.slice(0, 320)}...` : output;
+}
+
+export function FinalOutputPanel({ onOpenFull, output }: FinalOutputPanelProps) {
   return (
     <section aria-label="Final output" aria-atomic="true" aria-live="polite" className="final-output-panel">
-      <h2>Final Output</h2>
-      <p className="final-output-text">{output ?? "Awaiting Luma's synthesis."}</p>
+      <div className="panel-title-row">
+        <h2>Final Output</h2>
+        <button disabled={!output} onClick={onOpenFull} type="button">
+          Open full final output
+        </button>
+      </div>
+      <p className="final-output-text">{previewOutput(output)}</p>
     </section>
   );
 }
