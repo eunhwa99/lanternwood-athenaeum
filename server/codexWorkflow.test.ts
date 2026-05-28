@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  collectCodexAgentJobEvents,
   collectCodexEvents,
+  collectCodexSynthesisEvents,
   createCodexCliExecutor,
   createCodexCliWorkflow,
   getCodexConfigPath,
@@ -72,6 +74,58 @@ describe("codex cli workflow", () => {
     expect(events.find((event) => event.type === "agent.prompted" && event.payload?.recipientAgentId === "orion")?.payload).toMatchObject({
       senderAgentId: "luma",
       speechBubble: expect.stringContaining("Orion"),
+    });
+  });
+
+  it("streams one queued specialist job without synthesizing the task", async () => {
+    const events = await collectCodexAgentJobEvents(
+      {
+        agentId: "orion",
+        input: "Research this",
+        taskId: "task-queue-1",
+      },
+      {
+        ...workflowFixture(),
+        async runSpecialist(specialist, _input, onProgress) {
+          onProgress?.({ rawChunk: "progress" });
+
+          return {
+            rawResponse: `${specialist.displayName} raw`,
+            report: `${specialist.displayName} queued report`,
+          };
+        },
+      },
+    );
+
+    expect(events.map((event) => event.type)).toEqual(["agent.working", "agent.working", "agent.reporting"]);
+    expect(events.at(-1)).toMatchObject({
+      agentId: "orion",
+      payload: {
+        report: "Orion queued report",
+      },
+      taskId: "task-queue-1",
+    });
+  });
+
+  it("streams queued Luma synthesis from existing specialist reports", async () => {
+    const events = await collectCodexSynthesisEvents(
+      {
+        input: "Research this",
+        reports: { orion: "Research report" },
+        selectedAgentIds: ["orion"],
+        taskId: "task-queue-1",
+      },
+      workflowFixture({ finalOutput: "Queued final", rawResponse: "Queued raw" }),
+    );
+
+    expect(events.map((event) => event.type)).toEqual(["agent.working", "approval.requested", "agent.done", "agent.done"]);
+    expect(events.at(-1)).toMatchObject({
+      agentId: "luma",
+      payload: {
+        finalOutput: "Queued final",
+        rawResponse: "Queued raw",
+      },
+      taskId: "task-queue-1",
     });
   });
 

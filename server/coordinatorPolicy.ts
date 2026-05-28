@@ -55,8 +55,8 @@ function explicitPaths(input: string) {
 function isInsideRoot(path: string, root: string) {
   const candidate = path === "~" ? resolve(dirname(root)) : path.startsWith("~/") ? resolve(dirname(root), path.slice(2)) : resolve(path);
   const resolvedRoot = realpathIfExists(root);
-  const existingCandidate = nearestExistingPath(candidate);
-  const resolvedCandidate = existingCandidate ? realpathIfExists(existingCandidate) : candidate;
+  const existingCandidate = existsSync(root) ? nearestExistingPath(candidate) : undefined;
+  const resolvedCandidate = existingCandidate ? realpathIfExists(existingCandidate) : resolve(candidate);
 
   return resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(`${resolvedRoot}${sep}`);
 }

@@ -138,22 +138,25 @@ test("renders a nonblank scene, completes mock flow, bubbles dispatch/report, an
   expect(initialLuma).toBeDefined();
 
   await page.getByLabel("Task request").fill("Review this code and verify risky edge cases");
-  await page.getByRole("button", { name: "Send to Luma" }).click();
+  await page.getByRole("button", { name: "Send to Queue" }).click();
 
-  await expect.poll(async () => (await readDebugBubbleHistory(page)).map((bubble) => bubble.text).join("\n")).toContain("Orion");
+  await expect.poll(async () => (await readDebugBubbleHistory(page)).map((bubble) => bubble.text).join("\n")).toContain(
+    "[T1] Orion task: Review this code and verify risky edge cases",
+  );
   await expect.poll(async () => (await readDebugAgent(page, "luma"))?.x ?? 999).toBeLessThan(initialLuma!.x);
   await expect
-    .poll(async () => (await readDebugBubbleHistory(page)).some((bubble) => /Research brief|Memory note|Draft note|Review note/.test(bubble.text)))
+    .poll(async () => (await readDebugBubbleHistory(page)).some((bubble) => bubble.text.includes("[T1] Orion answered")))
     .toBe(true);
   const promptBubble = (await readDebugBubbleHistory(page)).find((bubble) => bubble.text.includes("Orion"));
   expect(promptBubble?.owner).toBe("luma");
+  expect(promptBubble?.text).not.toContain("highest-risk milestone");
   expect(promptBubble?.lifetime).toBeGreaterThanOrEqual(2.1);
   expect(promptBubble?.lifetime).toBeLessThanOrEqual(2.3);
 
-  await expect(page.getByRole("button", { name: "Open full final output" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("button", { name: "Open final output for T1 Review this code and verify risky edge cases" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("button", { name: "Open full final output" })).toHaveCount(0);
   await expect(page.getByRole("region", { name: "Final output" })).toHaveCount(0);
-  await expect(page.getByRole("region", { name: "Routing decision" })).toContainText("Luma selected: Orion, Argus");
-  await expect(page.getByRole("region", { name: "Routing decision" })).toContainText("Skipped: Neria, Quill");
+  await expect(page.getByRole("region", { name: "Routing decision" })).toHaveCount(0);
   await expect(page.getByLabel("Agents summary")).toContainText("Argus: done");
 
   await page.evaluate(() => {
@@ -170,10 +173,13 @@ test("renders a nonblank scene, completes mock flow, bubbles dispatch/report, an
     expect(frozenScene[target.name], `${target.name} frozen pixel count`).toBeGreaterThan(target.minPixels);
   }
 
-  await page.getByRole("button", { name: "Open full final output" }).click();
-  await expect(page.getByRole("dialog", { name: "Run details" })).toContainText(
-    "Here is the focused plan synthesized from Orion and Argus.",
-  );
+  await page.getByRole("button", { name: "Open final output for T1 Review this code and verify risky edge cases" }).click();
+  const finalDrawer = page.getByRole("dialog", { name: "Run details" });
+  await expect(page.getByRole("tab", { name: "Final output" })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "Agent reports" })).toHaveAttribute("aria-selected", "true");
+  await expect(finalDrawer).toContainText("Luma Details");
+  await expect(finalDrawer).toContainText("Here is the focused plan synthesized from Orion and Argus.");
+  await expect(finalDrawer).toContainText("T1");
   await page.getByRole("button", { name: "Close" }).click();
 
   await page.getByRole("button", { name: "Open run log" }).click();
@@ -194,10 +200,11 @@ test("renders a nonblank scene, completes mock flow, bubbles dispatch/report, an
     maxDiffPixelRatio: 0.005,
   });
 
+  const previousBubbleHistoryLength = (await readDebugBubbleHistory(page)).length;
   await page.getByLabel("Task request").fill("Review another code path and verify risky edge cases");
-  await page.getByRole("button", { name: "Send to Luma" }).click();
-  await expect.poll(async () => (await readDebugBubbleHistory(page)).length).toBe(0);
-  await expect.poll(async () => (await readDebugBubbleHistory(page)).map((bubble) => bubble.text).join("\n")).toContain("Orion");
+  await page.getByRole("button", { name: "Send to Queue" }).click();
+  await expect.poll(async () => (await readDebugBubbleHistory(page)).length).toBeGreaterThan(previousBubbleHistoryLength);
+  await expect.poll(async () => (await readDebugBubbleHistory(page)).map((bubble) => bubble.text).join("\n")).toContain("[T2] Orion task:");
 });
 
 test("keeps the layout stable on mobile without horizontal overflow", async ({ page }) => {

@@ -1,13 +1,18 @@
 import { AGENTS } from "../agents/registry";
 import type { AgentId } from "../agents/types";
+import { taskLabelFor } from "../events/taskLabels";
 import type { AgentEvent, RunState } from "../events/types";
 
-export type RunDetailsTab = "final" | "routing" | "reports" | "prompts" | "raw" | "log";
+export type RunDetailsTab = "routing" | "reports" | "prompts" | "workload" | "log";
 
 export type AgentReportDetail = {
   agentId: AgentId;
   displayName: string;
+  eventId: string;
   report: string;
+  taskId: string;
+  taskLabel: string;
+  taskPrompt: string;
 };
 
 export type PromptDetail = {
@@ -18,6 +23,9 @@ export type PromptDetail = {
   senderAgentId: AgentId;
   senderName: string;
   speechBubble: string;
+  taskId: string;
+  taskLabel: string;
+  taskPrompt: string;
 };
 
 export type RawCodexDetail = {
@@ -33,6 +41,9 @@ export type RoutingDetail = {
   skippedNames: string[];
   rationale: string;
   confidence: "low" | "medium" | "high";
+  taskId: string;
+  taskLabel: string;
+  taskPrompt: string;
 };
 
 export type RunDetails = {
@@ -43,6 +54,7 @@ export type RunDetails = {
   rawCodexByAgent: RawCodexDetail[];
   runLog: string[];
   routing: RoutingDetail[];
+  selectedTaskLabel?: string;
 };
 
 function agentDisplayName(agentId: AgentId) {
@@ -120,7 +132,7 @@ export function previewText(value: string | null | undefined, maxLength = 180): 
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
 }
 
-export function createRunDetails(state: RunState): RunDetails {
+export function createRunDetails(state: RunState, selectedTaskId?: string): RunDetails {
   let rawStream = "";
   const finalRawParts: string[] = [];
   const rawByAgent = new Map<AgentId, string>();
@@ -128,12 +140,27 @@ export function createRunDetails(state: RunState): RunDetails {
   const prompts: PromptDetail[] = [];
   const routing: RoutingDetail[] = [];
   const runLog: string[] = [];
+  const events = selectedTaskId ? state.timeline.filter((event) => event.taskId === selectedTaskId) : state.timeline;
+  const selectedTask = selectedTaskId ? state.tasks.find((task) => task.taskId === selectedTaskId) : undefined;
+  const scopedTasks = selectedTaskId ? state.tasks.filter((task) => task.taskId === selectedTaskId) : state.tasks;
+
+  function eventTaskMeta(event: AgentEvent) {
+    return {
+      taskId: event.taskId,
+      taskLabel: taskLabelFor(state.tasks, event.taskId),
+      taskPrompt: state.tasks.find((task) => task.taskId === event.taskId)?.prompt ?? event.message,
+    };
+  }
+
+  function logPrefix(event: AgentEvent) {
+    return `${taskLabelFor(state.tasks, event.taskId)} ·`;
+  }
 
   function appendRawForAgent(agentId: AgentId, chunk: string) {
     rawByAgent.set(agentId, `${rawByAgent.get(agentId) ?? ""}${chunk}`);
   }
 
-  for (const event of state.timeline) {
+  for (const event of events) {
     const rawChunk = rawStringPayload(event, "rawChunk");
     const stderrChunk = rawStringPayload(event, "stderrChunk");
     const payload = event.payload as Record<string, unknown> | undefined;
@@ -162,7 +189,7 @@ export function createRunDetails(state: RunState): RunDetails {
 
     if (event.type !== "agent.prompted" && event.type !== "route.planned" && !report && event.type !== "permission.reviewed") {
       const payloadProgress = stringPayload(event, "progress");
-      runLog.push(`${agentDisplayName(event.agentId)} ${event.type}: ${payloadProgress ?? event.message}`);
+      runLog.push(`${logPrefix(event)} ${agentDisplayName(event.agentId)} ${event.type}: ${payloadProgress ?? event.message}`);
     }
 
     if (event.type === "route.planned" && event.payload) {
@@ -175,9 +202,10 @@ export function createRunDetails(state: RunState): RunDetails {
         selectedNames,
         skippedAgentIds: event.payload.skippedAgentIds,
         skippedNames,
+        ...eventTaskMeta(event),
       });
       runLog.push(
-        `Routing Decision: selected ${selectedNames.join(", ") || "none"}; skipped ${skippedNames.join(", ") || "none"}; confidence ${event.payload.confidence}; reason ${event.payload.rationale}`,
+        `${logPrefix(event)} Routing Decision: selected ${selectedNames.join(", ") || "none"}; skipped ${skippedNames.join(", ") || "none"}; confidence ${event.payload.confidence}; reason ${event.payload.rationale}`,
       );
     }
 
@@ -190,27 +218,48 @@ export function createRunDetails(state: RunState): RunDetails {
         senderAgentId: event.payload.senderAgentId,
         senderName: agentDisplayName(event.payload.senderAgentId),
         speechBubble: event.payload.speechBubble,
+        ...eventTaskMeta(event),
       });
-      runLog.push(`${agentDisplayName(event.payload.senderAgentId)} -> ${agentDisplayName(event.payload.recipientAgentId)}: ${event.payload.prompt}`);
+      runLog.push(`${logPrefix(event)} ${agentDisplayName(event.payload.senderAgentId)} -> ${agentDisplayName(event.payload.recipientAgentId)}: ${event.payload.prompt}`);
     }
 
     if (report) {
       agentReports.push({
         agentId: event.agentId,
         displayName: agentDisplayName(event.agentId),
+        eventId: event.eventId,
         report,
+        ...eventTaskMeta(event),
       });
-      runLog.push(`${agentDisplayName(event.agentId)} report: ${speechBubble ?? report}`);
+      runLog.push(`${logPrefix(event)} ${agentDisplayName(event.agentId)} report: ${speechBubble ?? report}`);
     }
 
     if (event.type === "permission.reviewed" && event.payload) {
-      runLog.push(`Coordinator ${event.payload.decision}: ${event.payload.action} (${event.payload.reason})`);
+      runLog.push(`${logPrefix(event)} Coordinator ${event.payload.decision}: ${event.payload.action} (${event.payload.reason})`);
     }
+  }
+
+  for (const task of scopedTasks) {
+    const finalOutput = state.finalOutputs[task.taskId] ?? task.finalOutput;
+
+    if (!finalOutput) {
+      continue;
+    }
+
+    agentReports.push({
+      agentId: "luma",
+      displayName: agentDisplayName("luma"),
+      eventId: `${task.taskId}-luma-final-output`,
+      report: finalOutput,
+      taskId: task.taskId,
+      taskLabel: taskLabelFor(state.tasks, task.taskId),
+      taskPrompt: task.prompt,
+    });
   }
 
   return {
     agentReports,
-    finalOutput: state.finalOutput,
+    finalOutput: selectedTaskId ? (state.finalOutputs[selectedTaskId] ?? selectedTask?.finalOutput ?? null) : state.finalOutput,
     prompts,
     rawCodex: sanitizeRawOutput([rawStream, ...finalRawParts].filter(Boolean).join("\n")),
     rawCodexByAgent: Array.from(rawByAgent.entries()).map(([agentId, rawResponse]) => ({
@@ -220,5 +269,6 @@ export function createRunDetails(state: RunState): RunDetails {
     })),
     runLog,
     routing,
+    selectedTaskLabel: selectedTask ? taskLabelFor(state.tasks, selectedTask.taskId) : undefined,
   };
 }

@@ -25,6 +25,8 @@ npm run build
 npm run e2e
 ```
 
+For this harness, `npm run verify` is the single full verification set and must include the e2e suite.
+
 ## Safety
 
 - Do not commit secrets or `.env` files.

@@ -1028,6 +1028,231 @@ export async function* createCodexEvents(
   }
 }
 
+export type CodexAgentJobInput = {
+  agentId: SpecialistId;
+  input: string;
+  taskId: string;
+};
+
+export type CodexSynthesisInput = {
+  input: string;
+  reports: SpecialistReports;
+  selectedAgentIds?: SpecialistId[];
+  taskId: string;
+};
+
+export async function* createCodexAgentJobEvents(
+  job: CodexAgentJobInput,
+  workflow: CodexWorkflowExecutors = createCodexCliWorkflow(),
+  options: CodexExecutionOptions = {},
+): AsyncIterable<AgentEvent> {
+  const globalAgents = options.globalAgents ?? (await loadGlobalAgents());
+  const specialist = REQUIRED_SPECIALISTS.find((candidate) => candidate.id === job.agentId);
+  const codexDiagnostics = {
+    backend: "connected",
+    cliCommand: "codex exec",
+    model: getCodexModelLabel(),
+    runMode: "codex",
+  };
+  let index = 1;
+
+  if (!specialist) {
+    yield event(job.taskId, index++, "luma", "agent.failed", `Unknown specialist: ${job.agentId}`, {
+      ...codexDiagnostics,
+      codexStatus: "failed",
+    });
+    return;
+  }
+
+  yield event(
+    job.taskId,
+    index++,
+    specialist.id,
+    specialist.id === "argus" ? "agent.reviewing" : "agent.working",
+    `${specialist.displayName} starts a queued Codex route`,
+    {
+      ...codexDiagnostics,
+      codexStatus: "calling",
+      progress: `${specialist.displayName} queued Codex route started.`,
+    },
+  );
+
+  const progressQueue = createAsyncQueue<CodexExecutionProgress>();
+  const execution = workflow
+    .runSpecialist(
+      specialist,
+      job.input,
+      (progress) => {
+        progressQueue.push(progress);
+      },
+      {
+        globalAgents,
+        previousRun: options.previousRun,
+        signal: options.signal,
+        specialistReports: options.specialistReports,
+      },
+    )
+    .then(
+      (value) => ({ type: "result" as const, value }),
+      (error: unknown) => ({ error, type: "error" as const }),
+    )
+    .finally(() => {
+      progressQueue.close();
+    });
+
+  while (true) {
+    const progress = await progressQueue.next();
+
+    if (options.signal?.aborted) {
+      await execution;
+      throw abortError();
+    }
+
+    if (!progress) {
+      break;
+    }
+
+    yield event(
+      job.taskId,
+      index++,
+      specialist.id,
+      specialist.id === "argus" ? "agent.reviewing" : "agent.working",
+      `${specialist.displayName} Codex CLI is streaming output`,
+      {
+        ...codexDiagnostics,
+        codexStatus: "streaming",
+        progress: `${specialist.displayName} Codex CLI is streaming output.`,
+        rawChunk: progress.rawChunk,
+        stderrChunk: progress.stderrChunk,
+      },
+    );
+  }
+
+  const outcome = await execution;
+
+  if (outcome.type === "error") {
+    yield event(job.taskId, index++, specialist.id, "agent.failed", messageFromError(outcome.error), {
+      ...codexDiagnostics,
+      codexStatus: "failed",
+      rawResponse: rawResponseFromError(outcome.error),
+    });
+    return;
+  }
+
+  const report = outcome.value.report.trim();
+
+  if (!report) {
+    yield event(job.taskId, index++, specialist.id, "agent.failed", `${specialist.displayName} did not return output.`, {
+      ...codexDiagnostics,
+      codexStatus: "failed",
+      rawResponse: outcome.value.rawResponse,
+    });
+    return;
+  }
+
+  yield event(job.taskId, index++, specialist.id, "agent.reporting", reportingMessages[specialist.id], {
+    ...codexDiagnostics,
+    codexStatus: "completed",
+    model: outcome.value.model ?? getCodexModelLabel(),
+    rawResponse: outcome.value.rawResponse,
+    report,
+    reportExcerpt: excerpt(report),
+    speechBubble: excerpt(report, 96),
+  });
+}
+
+export async function* createCodexSynthesisEvents(
+  task: CodexSynthesisInput,
+  workflow: CodexWorkflowExecutors = createCodexCliWorkflow(),
+  options: CodexExecutionOptions = {},
+): AsyncIterable<AgentEvent> {
+  const globalAgents = options.globalAgents ?? (await loadGlobalAgents());
+  const selectedSpecialists = REQUIRED_SPECIALISTS.filter((specialist) => task.selectedAgentIds?.includes(specialist.id));
+  const codexDiagnostics = {
+    backend: "connected",
+    cliCommand: "codex exec",
+    model: getCodexModelLabel(),
+    runMode: "codex",
+  };
+  let index = 1;
+
+  yield event(task.taskId, index++, "luma", "agent.working", "Luma starts queued Codex synthesis", {
+    ...codexDiagnostics,
+    codexStatus: "calling",
+    progress: "Luma queued Codex synthesis route started.",
+  });
+
+  const progressQueue = createAsyncQueue<CodexExecutionProgress>();
+  const execution = workflow
+    .synthesize(task.input, task.reports, (progress) => {
+      progressQueue.push(progress);
+    }, { globalAgents, previousRun: options.previousRun, signal: options.signal })
+    .then(
+      (value) => ({ type: "result" as const, value }),
+      (error: unknown) => ({ error, type: "error" as const }),
+    )
+    .finally(() => {
+      progressQueue.close();
+    });
+
+  while (true) {
+    const progress = await progressQueue.next();
+
+    if (options.signal?.aborted) {
+      await execution;
+      throw abortError();
+    }
+
+    if (!progress) {
+      break;
+    }
+
+    yield event(task.taskId, index++, "luma", "agent.working", "Luma Codex CLI is streaming synthesis", {
+      ...codexDiagnostics,
+      codexStatus: "streaming",
+      progress: "Luma Codex CLI is streaming synthesis.",
+      rawChunk: progress.rawChunk,
+      stderrChunk: progress.stderrChunk,
+    });
+  }
+
+  const outcome = await execution;
+
+  if (outcome.type === "error") {
+    yield event(task.taskId, index++, "luma", "agent.failed", messageFromError(outcome.error), {
+      ...codexDiagnostics,
+      codexStatus: "failed",
+      rawResponse: rawResponseFromError(outcome.error),
+    });
+    return;
+  }
+
+  let finalOutput = "";
+
+  try {
+    finalOutput = requireFinalOutput(outcome.value.finalOutput);
+  } catch (error) {
+    yield event(task.taskId, index++, "luma", "agent.failed", messageFromError(error), {
+      ...codexDiagnostics,
+      codexStatus: "failed",
+      rawResponse: outcome.value.rawResponse,
+    });
+    return;
+  }
+
+  yield event(task.taskId, index++, "luma", "approval.requested", "Luma raises the blue approval lantern");
+  for (const specialist of selectedSpecialists) {
+    yield event(task.taskId, index++, specialist.id, "agent.done", `${specialist.displayName} returns to their alcove`);
+  }
+  yield event(task.taskId, index++, "luma", "agent.done", "Luma places the final summary on the central desk", {
+    ...codexDiagnostics,
+    codexStatus: "completed",
+    finalOutput,
+    model: outcome.value.model ?? getCodexModelLabel(),
+    rawResponse: outcome.value.rawResponse,
+  });
+}
+
 export async function collectCodexEvents(
   input: string,
   workflow?: CodexWorkflowExecutors,
@@ -1036,6 +1261,34 @@ export async function collectCodexEvents(
   const events: AgentEvent[] = [];
 
   for await (const item of createCodexEvents(input, workflow, options)) {
+    events.push(item);
+  }
+
+  return events;
+}
+
+export async function collectCodexAgentJobEvents(
+  job: CodexAgentJobInput,
+  workflow?: CodexWorkflowExecutors,
+  options?: CodexExecutionOptions,
+): Promise<AgentEvent[]> {
+  const events: AgentEvent[] = [];
+
+  for await (const item of createCodexAgentJobEvents(job, workflow, options)) {
+    events.push(item);
+  }
+
+  return events;
+}
+
+export async function collectCodexSynthesisEvents(
+  task: CodexSynthesisInput,
+  workflow?: CodexWorkflowExecutors,
+  options?: CodexExecutionOptions,
+): Promise<AgentEvent[]> {
+  const events: AgentEvent[] = [];
+
+  for await (const item of createCodexSynthesisEvents(task, workflow, options)) {
     events.push(item);
   }
 

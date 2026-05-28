@@ -9,6 +9,13 @@ const baseEvent = {
 
 function stateWith(events: AgentEvent[], finalOutput: string | null = null): RunState {
   return {
+    agentQueues: {
+      argus: [],
+      luma: [],
+      neria: [],
+      orion: [],
+      quill: [],
+    },
     agents: {
       argus: { definition: {} as never, lastMessage: "", status: "idle" },
       luma: { definition: {} as never, lastMessage: "", status: "idle" },
@@ -18,6 +25,19 @@ function stateWith(events: AgentEvent[], finalOutput: string | null = null): Run
     },
     currentTask: { prompt: "Prompt", taskId: "task-1" },
     finalOutput,
+    finalOutputs: finalOutput ? { "task-1": finalOutput } : {},
+    tasks: [
+      {
+        completedAt: finalOutput ? "2026-05-26T00:00:01.000Z" : undefined,
+        createdAt: "2026-05-26T00:00:00.000Z",
+        finalOutput,
+        prompt: "Prompt",
+        selectedAgentIds: [],
+        skippedAgentIds: [],
+        status: finalOutput ? "done" : "running",
+        taskId: "task-1",
+      },
+    ],
     timeline: events,
   };
 }
@@ -111,14 +131,20 @@ describe("run details", () => {
 
     expect(details.finalOutput).toBe("Final answer");
     expect(details.routing[0]).toMatchObject({ selectedNames: ["Orion"], skippedNames: ["Neria", "Quill", "Argus"] });
-    expect(details.prompts[0]).toMatchObject({ prompt: "Research this", recipientAgentId: "orion" });
-    expect(details.agentReports[0]).toMatchObject({ agentId: "orion", report: "Research report" });
+    expect(details.routing[0]).toMatchObject({ taskLabel: "T1" });
+    expect(details.prompts[0]).toMatchObject({ prompt: "Research this", recipientAgentId: "orion", taskLabel: "T1" });
+    expect(details.agentReports).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ agentId: "orion", report: "Research report", taskLabel: "T1" }),
+        expect.objectContaining({ agentId: "luma", report: "Final answer", taskLabel: "T1" }),
+      ]),
+    );
     expect(details.rawCodex).toContain("[redacted-path]");
     expect(details.rawCodexByAgent[0]).toMatchObject({ agentId: "orion", rawResponse: expect.stringContaining("[redacted-path]") });
     expect(details.runLog).toEqual([
-      "Routing Decision: selected Orion; skipped Neria, Quill, Argus; confidence high; reason Needs research only",
-      "Luma -> Orion: Research this",
-      "Orion report: Research report",
+      "T1 · Routing Decision: selected Orion; skipped Neria, Quill, Argus; confidence high; reason Needs research only",
+      "T1 · Luma -> Orion: Research this",
+      "T1 · Orion report: Research report",
     ]);
   });
 
