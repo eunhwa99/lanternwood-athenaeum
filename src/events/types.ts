@@ -1,9 +1,12 @@
 import type { AgentDefinition, AgentId } from "../agents/types";
 
 export const AGENT_IDS = ["luma", "orion", "neria", "quill", "argus"] as const;
+export const SPECIALIST_AGENT_IDS = ["orion", "neria", "quill", "argus"] as const;
+export type SpecialistAgentId = (typeof SPECIALIST_AGENT_IDS)[number];
 
 export type AgentEventType =
   | "task.created"
+  | "route.planned"
   | "agent.planning"
   | "agent.delegated"
   | "agent.prompted"
@@ -18,6 +21,7 @@ export type AgentEventType =
 
 export const AGENT_EVENT_TYPES = [
   "task.created",
+  "route.planned",
   "agent.planning",
   "agent.delegated",
   "agent.prompted",
@@ -50,18 +54,18 @@ export type PreviousRunContext = {
   timeline: string[];
 };
 
-type BaseAgentEvent<TType extends AgentEventType> = {
+type BaseAgentEvent<TType extends AgentEventType, TAgentId extends AgentId = AgentId> = {
   eventId: string;
   taskId: string;
-  agentId: AgentId;
+  agentId: TAgentId;
   type: TType;
   message: string;
   timestamp: string;
 };
 
 export type AgentPromptedPayload = {
-  senderAgentId: AgentId;
-  recipientAgentId: AgentId;
+  senderAgentId: "luma";
+  recipientAgentId: SpecialistAgentId;
   prompt: string;
   promptExcerpt: string;
   speechBubble: string;
@@ -82,11 +86,19 @@ export type PermissionReviewedPayload = {
   path?: string;
 } & Record<string, unknown>;
 
+export type RoutePlannedPayload = {
+  selectedAgentIds: SpecialistAgentId[];
+  skippedAgentIds: SpecialistAgentId[];
+  rationale: string;
+  confidence: "low" | "medium" | "high";
+} & Record<string, unknown>;
+
 export type AgentEvent =
-  | (BaseAgentEvent<"agent.prompted"> & { payload: AgentPromptedPayload })
+  | (BaseAgentEvent<"route.planned", "luma"> & { payload: RoutePlannedPayload })
+  | (BaseAgentEvent<"agent.prompted", "luma"> & { payload: AgentPromptedPayload })
   | (BaseAgentEvent<"agent.reporting"> & { payload: AgentReportingPayload })
   | (BaseAgentEvent<"permission.reviewed"> & { payload: PermissionReviewedPayload })
-  | (BaseAgentEvent<Exclude<AgentEventType, "agent.prompted" | "agent.reporting" | "permission.reviewed">> & {
+  | (BaseAgentEvent<Exclude<AgentEventType, "route.planned" | "agent.prompted" | "agent.reporting" | "permission.reviewed">> & {
       payload?: Record<string, unknown>;
     });
 

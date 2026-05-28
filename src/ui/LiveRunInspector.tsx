@@ -68,9 +68,26 @@ function latestDiagnostics(state: RunState) {
   return null;
 }
 
+function agentDisplayName(agentId: AgentId) {
+  return AGENTS.find((agent) => agent.id === agentId)?.displayName ?? agentId;
+}
+
+function latestRouteEvent(state: RunState) {
+  for (let index = state.timeline.length - 1; index >= 0; index -= 1) {
+    const event = state.timeline[index];
+
+    if (event.type === "route.planned") {
+      return event;
+    }
+  }
+
+  return undefined;
+}
+
 export function LiveRunInspector({ onOpenDetails, runMode = "mock", state }: LiveRunInspectorProps) {
   const diagnostics = latestDiagnostics(state);
   const permissionReviews = state.timeline.filter((event) => event.type === "permission.reviewed");
+  const latestRoute = latestRouteEvent(state);
   const traceStatus = state.agents.luma.status === "done" || state.agents.luma.status === "failed" ? state.agents.luma.status : state.currentTask ? "running trace" : "idle";
 
   return (
@@ -109,6 +126,16 @@ export function LiveRunInspector({ onOpenDetails, runMode = "mock", state }: Liv
           </>
         ) : null}
       </dl>
+
+      {latestRoute?.payload ? (
+        <section className="routing-panel" aria-label="Routing decision">
+          <h3>Routing Decision</h3>
+          <p>Luma selected: {latestRoute.payload.selectedAgentIds.map(agentDisplayName).join(", ") || "None"}</p>
+          <p>Skipped: {latestRoute.payload.skippedAgentIds.map(agentDisplayName).join(", ") || "None"}</p>
+          <p>Confidence: {latestRoute.payload.confidence}</p>
+          <p>Reason: {latestRoute.payload.rationale}</p>
+        </section>
+      ) : null}
 
       {permissionReviews.length > 0 ? (
         <section className="permission-panel" aria-label="Coordinator permissions">

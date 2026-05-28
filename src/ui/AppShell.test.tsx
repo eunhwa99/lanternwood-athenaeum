@@ -71,14 +71,16 @@ describe("AppShell", () => {
     renderApp(<AppShell runAdapter={mockRunAdapter} />);
 
     fireEvent.change(screen.getByLabelText("Task request"), {
-      target: { value: "Draft a focused project plan" },
+      target: { value: "Review this code and verify risky edge cases" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Send to Luma" }));
 
-    await screen.findAllByText("Here is the focused plan synthesized from Orion, Neria, Quill, and Argus.");
+    await screen.findAllByText("Here is the focused plan synthesized from Orion and Argus.");
 
-    expect(screen.getByText("scene-events-21")).toBeInTheDocument();
+    expect(screen.getByText("scene-events-14")).toBeInTheDocument();
     expect(screen.getByLabelText("Agents summary")).toHaveTextContent("Argus: done");
+    expect(screen.getByRole("region", { name: "Routing decision" })).toHaveTextContent("Luma selected: Orion, Argus");
+    expect(screen.getByRole("region", { name: "Routing decision" })).toHaveTextContent("Skipped: Neria, Quill");
     expect(screen.getByRole("region", { name: "Live run inspector" })).toHaveTextContent(
       "Research brief: focus the plan around the highest-risk milestone first.",
     );
@@ -92,8 +94,13 @@ describe("AppShell", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Open full final output" }));
     expect(screen.getByRole("dialog", { name: "Run details" })).toHaveTextContent(
-      "Here is the focused plan synthesized from Orion, Neria, Quill, and Argus.",
+      "Here is the focused plan synthesized from Orion and Argus.",
     );
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Open run log" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Routing" }));
+    expect(screen.getByRole("dialog", { name: "Run details" })).toHaveTextContent("Selected agents: Orion, Argus");
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
 
     fireEvent.click(screen.getByRole("button", { name: "Open run log" }));
@@ -167,12 +174,12 @@ describe("AppShell", () => {
   it("increments the scene run epoch even when the same prompt is submitted again", async () => {
     renderApp(<AppShell runAdapter={mockRunAdapter} />);
 
-    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Repeatable prompt" } });
+    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "What is Luma?" } });
     fireEvent.click(screen.getByRole("button", { name: "Send to Luma" }));
-    await screen.findAllByText("Here is the focused plan synthesized from Orion, Neria, Quill, and Argus.");
+    await screen.findAllByText("This request is simple enough for Luma to answer directly without specialist routing.");
     expect(screen.getByText("scene-run-1")).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Repeatable prompt" } });
+    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "What is Luma?" } });
     fireEvent.click(screen.getByRole("button", { name: "Send to Luma" }));
 
     await waitFor(() => expect(screen.getByText("scene-run-2")).toBeInTheDocument());

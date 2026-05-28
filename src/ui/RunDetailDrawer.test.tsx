@@ -17,6 +17,20 @@ const state = {
   timeline: [
     {
       agentId: "luma",
+      eventId: "evt-0",
+      message: "Luma selected a specialist route",
+      payload: {
+        confidence: "high",
+        rationale: "Needs research only",
+        selectedAgentIds: ["orion"],
+        skippedAgentIds: ["neria", "quill", "argus"],
+      },
+      taskId: "task-1",
+      timestamp: "2026-05-26T00:00:00.000Z",
+      type: "route.planned",
+    },
+    {
+      agentId: "luma",
       eventId: "evt-1",
       message: "Luma prompts Orion",
       payload: {
@@ -51,6 +65,10 @@ describe("RunDetailDrawer", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Run log" }));
     expect(screen.getByText("Luma -> Orion: Research this")).toBeInTheDocument();
     expect(screen.getByText("Orion report: Research report")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Routing" }));
+    expect(screen.getByText(/Selected agents: Orion/)).toBeInTheDocument();
+    expect(screen.getByText(/Skipped agents: Neria, Quill, Argus/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: "Coordinator prompts" }));
     expect(screen.getByText("Research this")).toBeInTheDocument();

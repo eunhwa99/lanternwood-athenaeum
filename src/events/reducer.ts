@@ -13,6 +13,7 @@ const eventStatus: Partial<Record<AgentEvent["type"], AgentStatus>> = {
   "agent.failed": "failed",
   "approval.requested": "waitingApproval",
   "permission.reviewed": "reviewing",
+  "route.planned": "planning",
 };
 
 export function createInitialRunState(agents: AgentDefinition[]): RunState {

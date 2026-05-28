@@ -97,6 +97,12 @@ async function readDebugBubbleHistory(page: Page) {
   );
 }
 
+async function readDebugBubbles(page: Page) {
+  return page.evaluate(
+    () => (window as Window & { __LANTERNWOOD_DEBUG_BUBBLES__?: DebugBubble[] }).__LANTERNWOOD_DEBUG_BUBBLES__ ?? [],
+  );
+}
+
 async function expectNoHorizontalOverflow(page: Page, width: number) {
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
 }
@@ -131,7 +137,7 @@ test("renders a nonblank scene, completes mock flow, bubbles dispatch/report, an
   const initialLuma = await readDebugAgent(page, "luma");
   expect(initialLuma).toBeDefined();
 
-  await page.getByLabel("Task request").fill("Draft a focused project plan");
+  await page.getByLabel("Task request").fill("Review this code and verify risky edge cases");
   await page.getByRole("button", { name: "Send to Luma" }).click();
 
   await expect.poll(async () => (await readDebugBubbleHistory(page)).map((bubble) => bubble.text).join("\n")).toContain("Orion");
@@ -146,6 +152,8 @@ test("renders a nonblank scene, completes mock flow, bubbles dispatch/report, an
 
   await expect(page.getByRole("button", { name: "Open full final output" })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole("region", { name: "Final output" })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Routing decision" })).toContainText("Luma selected: Orion, Argus");
+  await expect(page.getByRole("region", { name: "Routing decision" })).toContainText("Skipped: Neria, Quill");
   await expect(page.getByLabel("Agents summary")).toContainText("Argus: done");
 
   await page.evaluate(() => {
@@ -164,24 +172,29 @@ test("renders a nonblank scene, completes mock flow, bubbles dispatch/report, an
 
   await page.getByRole("button", { name: "Open full final output" }).click();
   await expect(page.getByRole("dialog", { name: "Run details" })).toContainText(
-    "Here is the focused plan synthesized from Orion, Neria, Quill, and Argus.",
+    "Here is the focused plan synthesized from Orion and Argus.",
   );
   await page.getByRole("button", { name: "Close" }).click();
 
   await page.getByRole("button", { name: "Open run log" }).click();
+  await page.getByRole("tab", { name: "Routing" }).click();
+  await expect(page.getByRole("dialog", { name: "Run details" })).toContainText("Selected agents: Orion, Argus");
+  await page.getByRole("tab", { name: "Run log" }).click();
   await expect(page.getByRole("dialog", { name: "Run details" })).toContainText("Luma -> Orion");
   await expect(page.getByRole("dialog", { name: "Run details" })).toContainText("Orion report: Research brief");
   await page.getByRole("button", { name: "Close" }).click();
+
+  await page.evaluate(() => {
+    (window as Window & { __LANTERNWOOD_FREEZE_ANIMATION__?: boolean }).__LANTERNWOOD_FREEZE_ANIMATION__ = false;
+  });
+  await expect.poll(async () => (await readDebugBubbles(page)).length).toBe(0);
 
   await expect(page).toHaveScreenshot("lanternwood-dashboard.png", {
     fullPage: true,
     maxDiffPixelRatio: 0.005,
   });
 
-  await page.evaluate(() => {
-    (window as Window & { __LANTERNWOOD_FREEZE_ANIMATION__?: boolean }).__LANTERNWOOD_FREEZE_ANIMATION__ = false;
-  });
-  await page.getByLabel("Task request").fill("Draft another focused project plan");
+  await page.getByLabel("Task request").fill("Review another code path and verify risky edge cases");
   await page.getByRole("button", { name: "Send to Luma" }).click();
   await expect.poll(async () => (await readDebugBubbleHistory(page)).length).toBe(0);
   await expect.poll(async () => (await readDebugBubbleHistory(page)).map((bubble) => bubble.text).join("\n")).toContain("Orion");

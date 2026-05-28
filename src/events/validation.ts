@@ -1,7 +1,8 @@
-import { AGENT_EVENT_TYPES, AGENT_IDS, type AgentEvent } from "./types";
+import { AGENT_EVENT_TYPES, AGENT_IDS, SPECIALIST_AGENT_IDS, type AgentEvent } from "./types";
 
 const agentIds = new Set<string>(AGENT_IDS);
 const eventTypes = new Set<string>(AGENT_EVENT_TYPES);
+const specialistAgentIds = new Set<string>(SPECIALIST_AGENT_IDS);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -32,10 +33,9 @@ function hasBaseEventShape(value: Record<string, unknown>) {
 function isPromptedPayload(payload: unknown) {
   return (
     isRecord(payload) &&
-    isString(payload.senderAgentId) &&
-    agentIds.has(payload.senderAgentId) &&
+    payload.senderAgentId === "luma" &&
     isString(payload.recipientAgentId) &&
-    agentIds.has(payload.recipientAgentId) &&
+    specialistAgentIds.has(payload.recipientAgentId) &&
     isString(payload.prompt) &&
     isString(payload.promptExcerpt) &&
     isString(payload.speechBubble)
@@ -67,13 +67,45 @@ function isReportingPayload(payload: unknown) {
   );
 }
 
+function isSpecialistPartition(selected: unknown, skipped: unknown) {
+  if (!Array.isArray(selected) || !Array.isArray(skipped)) {
+    return false;
+  }
+
+  const selectedSet = new Set(selected);
+  const skippedSet = new Set(skipped);
+  const routeSet = new Set([...selected, ...skipped]);
+
+  return (
+    selected.length === selectedSet.size &&
+    skipped.length === skippedSet.size &&
+    selected.every((item) => typeof item === "string" && specialistAgentIds.has(item) && !skippedSet.has(item)) &&
+    skipped.every((item) => typeof item === "string" && specialistAgentIds.has(item) && !selectedSet.has(item)) &&
+    SPECIALIST_AGENT_IDS.every((agentId) => routeSet.has(agentId)) &&
+    routeSet.size === SPECIALIST_AGENT_IDS.length
+  );
+}
+
+function isRoutePlannedPayload(payload: unknown) {
+  return (
+    isRecord(payload) &&
+    isSpecialistPartition(payload.selectedAgentIds, payload.skippedAgentIds) &&
+    isString(payload.rationale) &&
+    (payload.confidence === "low" || payload.confidence === "medium" || payload.confidence === "high")
+  );
+}
+
 export function isAgentEvent(value: unknown): value is AgentEvent {
   if (!isRecord(value) || !hasBaseEventShape(value)) {
     return false;
   }
 
   if (value.type === "agent.prompted") {
-    return isPromptedPayload(value.payload);
+    return value.agentId === "luma" && isPromptedPayload(value.payload);
+  }
+
+  if (value.type === "route.planned") {
+    return value.agentId === "luma" && isRoutePlannedPayload(value.payload);
   }
 
   if (value.type === "permission.reviewed") {

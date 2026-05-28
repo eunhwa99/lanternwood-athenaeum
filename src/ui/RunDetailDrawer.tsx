@@ -15,6 +15,7 @@ type RunDetailDrawerProps = {
 
 const tabs: Array<{ id: RunDetailsTab; label: string }> = [
   { id: "final", label: "Final output" },
+  { id: "routing", label: "Routing" },
   { id: "reports", label: "Agent reports" },
   { id: "prompts", label: "Coordinator prompts" },
   { id: "raw", label: "Raw Codex" },
@@ -181,6 +182,35 @@ export function RunDetailDrawer({ initialTab = "final", isOpen, onClose, selecte
                 {copyStatus === "copied" ? "Copied final output." : copyStatus === "failed" ? "Copy failed." : ""}
               </p>
               <pre>{details.finalOutput ?? "Awaiting Luma's synthesis."}</pre>
+            </section>
+          ) : null}
+
+          {activeTab === "routing" ? (
+            <section
+              aria-labelledby="run-detail-tab-routing"
+              id="run-detail-panel-routing"
+              role="tabpanel"
+              tabIndex={0}
+            >
+              <h3>Routing Decision</h3>
+              {details.routing.length > 0 ? (
+                <div className="drawer-list-panel">
+                  {details.routing.map((route, index) => (
+                    <article className="drawer-list-item routing-detail" key={`${index}-${route.rationale}`}>
+                      <h4>Confidence: {route.confidence}</h4>
+                      <p>
+                        Selected agents: {route.selectedNames.join(", ") || "None"}
+                        {"\n"}
+                        Skipped agents: {route.skippedNames.join(", ") || "None"}
+                        {"\n"}
+                        Reason: {route.rationale}
+                      </p>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p>No routing decision captured for this run.</p>
+              )}
             </section>
           ) : null}
 

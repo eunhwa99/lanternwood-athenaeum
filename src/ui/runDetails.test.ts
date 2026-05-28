@@ -68,6 +68,19 @@ describe("run details", () => {
           {
             ...baseEvent,
             agentId: "luma",
+            eventId: "evt-0",
+            message: "Luma selected a specialist route",
+            payload: {
+              confidence: "high",
+              rationale: "Needs research only",
+              selectedAgentIds: ["orion"],
+              skippedAgentIds: ["neria", "quill", "argus"],
+            },
+            type: "route.planned",
+          },
+          {
+            ...baseEvent,
+            agentId: "luma",
             eventId: "evt-1",
             message: "Luma prompts Orion",
             payload: {
@@ -97,11 +110,13 @@ describe("run details", () => {
     );
 
     expect(details.finalOutput).toBe("Final answer");
+    expect(details.routing[0]).toMatchObject({ selectedNames: ["Orion"], skippedNames: ["Neria", "Quill", "Argus"] });
     expect(details.prompts[0]).toMatchObject({ prompt: "Research this", recipientAgentId: "orion" });
     expect(details.agentReports[0]).toMatchObject({ agentId: "orion", report: "Research report" });
     expect(details.rawCodex).toContain("[redacted-path]");
     expect(details.rawCodexByAgent[0]).toMatchObject({ agentId: "orion", rawResponse: expect.stringContaining("[redacted-path]") });
     expect(details.runLog).toEqual([
+      "Routing Decision: selected Orion; skipped Neria, Quill, Argus; confidence high; reason Needs research only",
       "Luma -> Orion: Research this",
       "Orion report: Research report",
     ]);

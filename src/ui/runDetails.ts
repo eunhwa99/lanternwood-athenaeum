@@ -2,7 +2,7 @@ import { AGENTS } from "../agents/registry";
 import type { AgentId } from "../agents/types";
 import type { AgentEvent, RunState } from "../events/types";
 
-export type RunDetailsTab = "final" | "reports" | "prompts" | "raw" | "log";
+export type RunDetailsTab = "final" | "routing" | "reports" | "prompts" | "raw" | "log";
 
 export type AgentReportDetail = {
   agentId: AgentId;
@@ -26,6 +26,15 @@ export type RawCodexDetail = {
   rawResponse: string;
 };
 
+export type RoutingDetail = {
+  selectedAgentIds: AgentId[];
+  selectedNames: string[];
+  skippedAgentIds: AgentId[];
+  skippedNames: string[];
+  rationale: string;
+  confidence: "low" | "medium" | "high";
+};
+
 export type RunDetails = {
   agentReports: AgentReportDetail[];
   finalOutput: string | null;
@@ -33,6 +42,7 @@ export type RunDetails = {
   rawCodex: string;
   rawCodexByAgent: RawCodexDetail[];
   runLog: string[];
+  routing: RoutingDetail[];
 };
 
 function agentDisplayName(agentId: AgentId) {
@@ -116,6 +126,7 @@ export function createRunDetails(state: RunState): RunDetails {
   const rawByAgent = new Map<AgentId, string>();
   const agentReports: AgentReportDetail[] = [];
   const prompts: PromptDetail[] = [];
+  const routing: RoutingDetail[] = [];
   const runLog: string[] = [];
 
   function appendRawForAgent(agentId: AgentId, chunk: string) {
@@ -149,9 +160,25 @@ export function createRunDetails(state: RunState): RunDetails {
       );
     }
 
-    if (event.type !== "agent.prompted" && !report && event.type !== "permission.reviewed") {
+    if (event.type !== "agent.prompted" && event.type !== "route.planned" && !report && event.type !== "permission.reviewed") {
       const payloadProgress = stringPayload(event, "progress");
       runLog.push(`${agentDisplayName(event.agentId)} ${event.type}: ${payloadProgress ?? event.message}`);
+    }
+
+    if (event.type === "route.planned" && event.payload) {
+      const selectedNames = event.payload.selectedAgentIds.map(agentDisplayName);
+      const skippedNames = event.payload.skippedAgentIds.map(agentDisplayName);
+      routing.push({
+        confidence: event.payload.confidence,
+        rationale: event.payload.rationale,
+        selectedAgentIds: event.payload.selectedAgentIds,
+        selectedNames,
+        skippedAgentIds: event.payload.skippedAgentIds,
+        skippedNames,
+      });
+      runLog.push(
+        `Routing Decision: selected ${selectedNames.join(", ") || "none"}; skipped ${skippedNames.join(", ") || "none"}; confidence ${event.payload.confidence}; reason ${event.payload.rationale}`,
+      );
     }
 
     if (event.type === "agent.prompted" && event.payload) {
@@ -192,5 +219,6 @@ export function createRunDetails(state: RunState): RunDetails {
       rawResponse: sanitizeRawOutput(rawResponse),
     })),
     runLog,
+    routing,
   };
 }

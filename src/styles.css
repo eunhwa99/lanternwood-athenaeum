@@ -344,7 +344,8 @@ button:disabled {
   opacity: 0.55;
 }
 
-.permission-panel {
+.permission-panel,
+.routing-panel {
   max-height: 116px;
   overflow: auto;
   border: 1px solid rgba(230, 205, 145, 0.16);
@@ -353,15 +354,18 @@ button:disabled {
   padding: 10px;
 }
 
-.permission-panel h3 {
+.permission-panel h3,
+.routing-panel h3 {
   font-size: 0.92rem;
   margin-bottom: 6px;
 }
 
-.permission-panel p {
+.permission-panel p,
+.routing-panel p {
   margin: 0;
   color: #e6dcc7;
   font-size: 0.84rem;
+  overflow-wrap: anywhere;
 }
 
 .inspector-actions {
