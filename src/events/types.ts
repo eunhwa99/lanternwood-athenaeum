@@ -1,3 +1,4 @@
+
 import type { AgentDefinition, AgentId } from "../agents/types";
 
 export const AGENT_IDS = ["luma", "orion", "neria", "quill", "argus"] as const;
@@ -45,6 +46,10 @@ export type AgentStatus =
   | "waitingApproval"
   | "done"
   | "failed";
+
+export type TaskStatus = "queued" | "routing" | "running" | "synthesizing" | "done" | "failed";
+
+export type AgentJobStatus = "queued" | "running" | "done" | "failed";
 
 export type PreviousRunContext = {
   prompt: string;
@@ -106,6 +111,7 @@ export type AgentRuntimeState = {
   definition: AgentDefinition;
   status: AgentStatus;
   lastMessage: string;
+  currentJobId?: string;
 };
 
 export type CurrentTask = {
@@ -113,9 +119,38 @@ export type CurrentTask = {
   prompt: string;
 };
 
+export type TaskRecord = {
+  completedAt?: string;
+  createdAt: string;
+  error?: string;
+  finalOutput: string | null;
+  prompt: string;
+  selectedAgentIds: AgentId[];
+  skippedAgentIds: AgentId[];
+  status: TaskStatus;
+  taskId: string;
+};
+
+export type AgentJob = {
+  agentId: AgentId;
+  completedAt?: string;
+  error?: string;
+  jobId: string;
+  lastMessage: string;
+  output?: string;
+  prompt: string;
+  queuedAt: string;
+  startedAt?: string;
+  status: AgentJobStatus;
+  taskId: string;
+};
+
 export type RunState = {
   currentTask: CurrentTask | null;
   agents: Record<AgentId, AgentRuntimeState>;
+  agentQueues: Record<AgentId, AgentJob[]>;
   finalOutput: string | null;
+  finalOutputs: Record<string, string>;
+  tasks: TaskRecord[];
   timeline: AgentEvent[];
 };

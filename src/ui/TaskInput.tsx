@@ -10,13 +10,14 @@ type TaskInputProps = {
 
 export function TaskInput({ onSubmit, onStop, disabled = false, isRunning = false }: TaskInputProps) {
   const [prompt, setPrompt] = useState("Plan my interview prep for this week");
+  const trimmedPrompt = prompt.trim();
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const trimmed = prompt.trim();
 
-    if (trimmed.length > 0) {
-      onSubmit(trimmed);
+    if (trimmedPrompt.length > 0) {
+      onSubmit(trimmedPrompt);
+      setPrompt("");
     }
   }
 
@@ -30,7 +31,7 @@ export function TaskInput({ onSubmit, onStop, disabled = false, isRunning = fals
       />
       <div className="task-input-actions">
         <button disabled={disabled} type="submit">
-          Send to Luma
+          Send to Queue
         </button>
         {isRunning ? (
           <button className="task-stop-button" onClick={onStop} type="button">

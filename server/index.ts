@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage } from "node:http";
 import type { PreviousRunContext } from "../src/events/types";
 import { validateAgentEvent } from "../src/events/validation";
 import { createTaskId } from "../src/harness/taskIds";
-import { createCodexEvents } from "./codexWorkflow";
+import { createCodexAgentJobEvents, createCodexEvents, createCodexSynthesisEvents } from "./codexWorkflow";
 import { loadDotEnvFile } from "./env";
 import { validatePreviousRun } from "./requestValidation";
 import { encodeAgentEvent } from "./sse";
@@ -12,6 +12,15 @@ loadDotEnvFile();
 const port = Number(process.env.LANTERNWOOD_CODEX_PORT ?? 8787);
 const healthToken = process.env.LANTERNWOOD_CODEX_HEALTH_TOKEN;
 const maxBodyBytes = 128 * 1024;
+
+type SpecialistId = "argus" | "neria" | "orion" | "quill";
+
+const specialistIds = new Set<SpecialistId>(["argus", "neria", "orion", "quill"]);
+const codexRoutes = new Set(["/api/runs", "/api/agent-jobs", "/api/synthesis"]);
+
+function requestPath(url: string | undefined) {
+  return url?.split("?")[0]?.replace(/\/+$/, "") || "/";
+}
 
 async function readJsonBody(request: IncomingMessage) {
   const chunks: Buffer[] = [];
@@ -30,7 +39,38 @@ async function readJsonBody(request: IncomingMessage) {
 
   const body = Buffer.concat(chunks).toString("utf8");
 
-  return JSON.parse(body) as { input?: unknown; previousRun?: unknown };
+  return JSON.parse(body) as Record<string, unknown>;
+}
+
+function validateSpecialistId(value: unknown): SpecialistId | undefined {
+  return typeof value === "string" && specialistIds.has(value as SpecialistId) ? (value as SpecialistId) : undefined;
+}
+
+function validateSpecialistIds(value: unknown): SpecialistId[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((item): item is SpecialistId => validateSpecialistId(item) !== undefined);
+}
+
+function validateReports(value: unknown): Partial<Record<SpecialistId, string>> {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+
+  const record = value as Record<string, unknown>;
+  const reports: Partial<Record<SpecialistId, string>> = {};
+
+  for (const agentId of specialistIds) {
+    const report = record[agentId];
+
+    if (typeof report === "string") {
+      reports[agentId] = report;
+    }
+  }
+
+  return reports;
 }
 
 const server = createServer(async (request, response) => {
@@ -50,7 +90,9 @@ const server = createServer(async (request, response) => {
     return;
   }
 
-  if (request.method !== "POST" || request.url !== "/api/runs") {
+  const path = requestPath(request.url);
+
+  if (request.method !== "POST" || !codexRoutes.has(path)) {
     response.writeHead(404, { "Content-Type": "text/plain" });
     response.end("Not found");
     return;
@@ -58,8 +100,9 @@ const server = createServer(async (request, response) => {
 
   let input = "";
   let previousRun: PreviousRunContext | undefined;
+  let body: Record<string, unknown>;
   try {
-    const body = await readJsonBody(request);
+    body = await readJsonBody(request);
     input = typeof body.input === "string" ? body.input.trim() : "";
     previousRun = validatePreviousRun(body.previousRun);
   } catch {
@@ -88,7 +131,40 @@ const server = createServer(async (request, response) => {
   });
 
   try {
-    for await (const event of createCodexEvents(input, undefined, { previousRun, signal: abortController.signal })) {
+    const taskId = typeof body.taskId === "string" && body.taskId.trim() ? body.taskId.trim() : createTaskId(input);
+    const events =
+      path === "/api/agent-jobs"
+        ? (() => {
+            const agentId = validateSpecialistId(body.agentId);
+
+            if (!agentId) {
+              throw new Error("Missing or invalid agentId");
+            }
+
+            return createCodexAgentJobEvents(
+              {
+                agentId,
+                input,
+                taskId,
+              },
+              undefined,
+              { previousRun, signal: abortController.signal },
+            );
+          })()
+        : path === "/api/synthesis"
+          ? createCodexSynthesisEvents(
+              {
+                input,
+                reports: validateReports(body.reports),
+                selectedAgentIds: validateSpecialistIds(body.selectedAgentIds),
+                taskId,
+              },
+              undefined,
+              { previousRun, signal: abortController.signal },
+            )
+          : createCodexEvents(input, undefined, { previousRun, signal: abortController.signal, taskId });
+
+    for await (const event of events) {
       if (abortController.signal.aborted) {
         break;
       }

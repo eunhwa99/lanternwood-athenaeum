@@ -84,6 +84,96 @@ describe("codex run adapter", () => {
     );
   });
 
+  it("streams queued specialist jobs through the agent-job endpoint", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(
+            sseEvent({
+              agentId: "orion",
+              eventId: "evt-report",
+              message: "Orion reports",
+              payload: { report: "Research report" },
+              taskId: "task-1",
+              timestamp: "2026-05-26T00:00:01.000Z",
+              type: "agent.reporting",
+            }),
+          ),
+        );
+        controller.close();
+      },
+    });
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(body, { status: 200 }));
+    const adapter = createCodexRunAdapter({ endpoint: "/api/runs", fetchImpl: fetchMock });
+    const events = [];
+
+    for await (const event of adapter.startAgentJob!({
+      agentId: "orion",
+      delegatedPrompt: "Orion, research this.",
+      prompt: "Research this",
+      selectedAgentIds: ["orion"],
+      skippedAgentIds: ["neria", "quill", "argus"],
+      taskId: "task-1",
+    })) {
+      events.push(event);
+    }
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/agent-jobs",
+      expect.objectContaining({
+        body: JSON.stringify({
+          agentId: "orion",
+          delegatedPrompt: "Orion, research this.",
+          input: "Research this",
+          previousRun: undefined,
+          selectedAgentIds: ["orion"],
+          skippedAgentIds: ["neria", "quill", "argus"],
+          taskId: "task-1",
+        }),
+        method: "POST",
+      }),
+    );
+    expect(events[0]).toMatchObject({ agentId: "orion", type: "agent.reporting" });
+  });
+
+  it("streams queued synthesis through the synthesis endpoint", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(sseEvent(terminalEvent)));
+        controller.close();
+      },
+    });
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(body, { status: 200 }));
+    const adapter = createCodexRunAdapter({ endpoint: "/api/runs", fetchImpl: fetchMock });
+    const events = [];
+
+    for await (const event of adapter.synthesizeTask!({
+      prompt: "Research this",
+      reports: { orion: "Research report" },
+      selectedAgentIds: ["orion"],
+      skippedAgentIds: ["neria", "quill", "argus"],
+      taskId: "task-1",
+    })) {
+      events.push(event);
+    }
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/synthesis",
+      expect.objectContaining({
+        body: JSON.stringify({
+          input: "Research this",
+          previousRun: undefined,
+          reports: { orion: "Research report" },
+          selectedAgentIds: ["orion"],
+          skippedAgentIds: ["neria", "quill", "argus"],
+          taskId: "task-1",
+        }),
+        method: "POST",
+      }),
+    );
+    expect(events[0]).toMatchObject({ agentId: "luma", type: "agent.done" });
+  });
+
   it("rejects malformed SSE events before yielding them", async () => {
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -154,7 +244,7 @@ describe("codex run adapter", () => {
       for await (const event of adapter.startRun("Draft a plan")) {
         expect(event).toBeDefined();
       }
-    }).rejects.toThrow("Codex CLI run failed: No Codex login");
+    }).rejects.toThrow("Codex CLI run failed (503 error at /api/runs): No Codex login");
   });
 
   it("rejects an SSE stream that closes before a terminal Luma event", async () => {
