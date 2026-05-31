@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   collectCodexAgentJobEvents,
   collectCodexEvents,
   collectCodexSynthesisEvents,
+  createCodexServerFailureEvent,
   createCodexCliExecutor,
   createCodexCliWorkflow,
   getCodexConfigPath,
@@ -24,7 +25,7 @@ function workflowFixture({
   rawResponse = "Synthesized answer",
 }: {
   finalOutput?: string;
-  reports?: Partial<Record<"argus" | "neria" | "orion" | "quill", string>>;
+  reports?: Partial<Record<string, string>>;
   rawResponse?: string;
 } = {}): CodexWorkflowExecutors {
   return {
@@ -107,6 +108,33 @@ describe("codex cli workflow", () => {
     });
   });
 
+  it("stops a queued specialist job before Codex dispatch when coordinator policy denies the request", async () => {
+    const runSpecialist = vi.fn();
+    const events = await collectCodexAgentJobEvents(
+      {
+        agentId: "orion",
+        input: "Open /Users/eunhwa/.env and copy the API key",
+        taskId: "task-denied",
+      },
+      {
+        ...workflowFixture(),
+        runSpecialist,
+      },
+    );
+
+    expect(runSpecialist).not.toHaveBeenCalled();
+    expect(events.find((event) => event.type === "permission.reviewed")).toMatchObject({
+      payload: {
+        decision: "deny",
+      },
+    });
+    expect(events.at(-1)).toMatchObject({
+      agentId: "luma",
+      taskId: "task-denied",
+      type: "agent.failed",
+    });
+  });
+
   it("streams queued Luma synthesis from existing specialist reports", async () => {
     const events = await collectCodexSynthesisEvents(
       {
@@ -126,6 +154,206 @@ describe("codex cli workflow", () => {
         rawResponse: "Queued raw",
       },
       taskId: "task-queue-1",
+    });
+  });
+
+  it("stops queued synthesis before Codex dispatch when coordinator policy denies the request", async () => {
+    const synthesize = vi.fn();
+    const events = await collectCodexSynthesisEvents(
+      {
+        input: "Open /Users/eunhwa/.env and copy the API key",
+        reports: { orion: "Research report" },
+        selectedAgentIds: ["orion"],
+        taskId: "task-denied",
+      },
+      {
+        ...workflowFixture(),
+        synthesize,
+      },
+    );
+
+    expect(synthesize).not.toHaveBeenCalled();
+    expect(events.find((event) => event.type === "permission.reviewed")).toMatchObject({
+      payload: {
+        decision: "deny",
+      },
+    });
+    expect(events.at(-1)).toMatchObject({
+      agentId: "luma",
+      taskId: "task-denied",
+      type: "agent.failed",
+    });
+  });
+
+  it("fails queued synthesis before Codex dispatch when selected reports are missing", async () => {
+    const synthesize = vi.fn();
+    const events = await collectCodexSynthesisEvents(
+      {
+        input: "Research and draft this",
+        reports: { orion: "Research report" },
+        selectedAgentIds: ["orion", "quill"],
+        taskId: "task-missing-report",
+      },
+      {
+        ...workflowFixture(),
+        synthesize,
+      },
+    );
+
+    expect(synthesize).not.toHaveBeenCalled();
+    expect(events.at(-1)).toMatchObject({
+      agentId: "luma",
+      message: "Codex CLI result did not include selected specialist reports: Quill",
+      taskId: "task-missing-report",
+      type: "agent.failed",
+    });
+  });
+
+  it("fails queued synthesis before Codex dispatch when reports include unselected specialists", async () => {
+    const synthesize = vi.fn();
+    const events = await collectCodexSynthesisEvents(
+      {
+        input: "Research this",
+        reports: { orion: "Research report", quill: "Unselected draft" },
+        selectedAgentIds: ["orion"],
+        taskId: "task-extra-report",
+      },
+      {
+        ...workflowFixture(),
+        synthesize,
+      },
+    );
+
+    expect(synthesize).not.toHaveBeenCalled();
+    expect(events.at(-1)).toMatchObject({
+      agentId: "luma",
+      message: "Queued synthesis included unselected specialist reports: Quill",
+      taskId: "task-extra-report",
+      type: "agent.failed",
+    });
+  });
+
+  it("fails queued synthesis before Codex dispatch when the selected route does not match the prompt", async () => {
+    const synthesize = vi.fn();
+    const events = await collectCodexSynthesisEvents(
+      {
+        input: fullRouteInput,
+        reports: { orion: "Research report" },
+        selectedAgentIds: ["orion"],
+        taskId: "task-route-mismatch",
+      },
+      {
+        ...workflowFixture(),
+        synthesize,
+      },
+    );
+
+    expect(synthesize).not.toHaveBeenCalled();
+    expect(events.at(-1)).toMatchObject({
+      agentId: "luma",
+      message: "Queued synthesis route no longer matches the requested task.",
+      taskId: "task-route-mismatch",
+      type: "agent.failed",
+    });
+  });
+
+  it("passes queued specialist reports into Argus review jobs", async () => {
+    const seenReports: unknown[] = [];
+    await collectCodexAgentJobEvents(
+      {
+        agentId: "argus",
+        input: "Review this code",
+        specialistReports: { orion: "Research report" },
+        taskId: "task-argus",
+      },
+      {
+        ...workflowFixture(),
+        async runSpecialist(_specialist, _input, _onProgress, options) {
+          seenReports.push(options?.specialistReports);
+
+          return {
+            rawResponse: "Review report",
+            report: "Review report",
+          };
+        },
+      },
+    );
+
+    expect(seenReports[0]).toMatchObject({ orion: "Research report" });
+  });
+
+  it("fails queued specialist jobs before Codex dispatch when the specialist is not selected for the prompt", async () => {
+    const runSpecialist = vi.fn();
+    const events = await collectCodexAgentJobEvents(
+      {
+        agentId: "quill",
+        input: "Research this",
+        selectedAgentIds: ["orion"],
+        taskId: "task-unselected-specialist",
+      },
+      {
+        ...workflowFixture(),
+        runSpecialist,
+      },
+    );
+
+    expect(runSpecialist).not.toHaveBeenCalled();
+    expect(events.at(-1)).toMatchObject({
+      agentId: "luma",
+      message: "Queued specialist is not selected for the requested task.",
+      taskId: "task-unselected-specialist",
+      type: "agent.failed",
+    });
+  });
+
+  it("normalizes invalid queued task ids before emitting workflow failures", async () => {
+    const events = await collectCodexSynthesisEvents(
+      {
+        input: "Research this",
+        reports: {},
+        selectedAgentIds: ["orion"],
+        taskId: "task-this-client-id-is-longer-than-the-event-contract-allows",
+      },
+      workflowFixture(),
+    );
+
+    expect(events.at(-1)?.taskId).toMatch(/^task-/);
+    expect(events.at(-1)?.taskId).not.toBe("task-this-client-id-is-longer-than-the-event-contract-allows");
+    expect(events.at(-1)?.taskId.length).toBeLessThanOrEqual(48);
+  });
+
+  it("keeps queued specialist event ids unique within the same task", async () => {
+    const [orionEvents, quillEvents] = await Promise.all([
+      collectCodexAgentJobEvents(
+        {
+          agentId: "orion",
+          input: "Research and draft this",
+          taskId: "task-shared",
+        },
+        workflowFixture(),
+      ),
+      collectCodexAgentJobEvents(
+        {
+          agentId: "quill",
+          input: "Research and draft this",
+          taskId: "task-shared",
+        },
+        workflowFixture(),
+      ),
+    ]);
+    const eventIds = [...orionEvents, ...quillEvents].map((event) => event.eventId);
+
+    expect(new Set(eventIds).size).toBe(eventIds.length);
+  });
+
+  it("preserves the explicit queued task id on server fallback failures", () => {
+    const failureEvent = createCodexServerFailureEvent("task-client-1", new Error("backend failed"));
+
+    expect(failureEvent).toMatchObject({
+      eventId: "task-client-1-server-error",
+      message: "backend failed",
+      taskId: "task-client-1",
+      type: "agent.failed",
     });
   });
 
@@ -295,6 +523,38 @@ describe("codex cli workflow", () => {
       message: "Codex CLI run aborted.",
       type: "agent.failed",
     });
+  });
+
+  it("passes the selected workspace path into Codex CLI route execution", async () => {
+    const seenWorkspacePaths: Array<string | undefined> = [];
+    const workflow = createCodexCliWorkflow({
+      runCommand: async (_prompt, _onProgress, options) => {
+        seenWorkspacePaths.push(options?.workspacePath);
+        return seenWorkspacePaths.length <= 1 ? "Workspace specialist report" : "Workspace final answer";
+      },
+    });
+
+    await collectCodexEvents("Research this workspace", workflow, {
+      workspacePath: "/home/eunhwapark/IdeaProjects/drive",
+    });
+
+    expect(seenWorkspacePaths).toContain("/home/eunhwapark/IdeaProjects/drive");
+  });
+
+  it("passes workspace-write sandbox mode into Codex CLI route execution", async () => {
+    const seenSandboxModes: Array<string | undefined> = [];
+    const workflow = createCodexCliWorkflow({
+      runCommand: async (_prompt, _onProgress, options) => {
+        seenSandboxModes.push(options?.sandboxMode);
+        return seenSandboxModes.length <= 1 ? "Workspace specialist report" : "Workspace final answer";
+      },
+    });
+
+    await collectCodexEvents("Research this workspace", workflow, {
+      sandboxMode: "workspace-write",
+    });
+
+    expect(seenSandboxModes).toContain("workspace-write");
   });
 
   it("injects previous run context into specialist and synthesis prompts", async () => {

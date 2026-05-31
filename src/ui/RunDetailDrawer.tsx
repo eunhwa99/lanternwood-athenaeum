@@ -1,9 +1,9 @@
- import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
- import { AGENTS } from "../agents/registry";
- import type { AgentId } from "../agents/types";
- import { taskLabelFor } from "../events/taskLabels";
- import type { AgentJob, RunState, TaskRecord } from "../events/types";
- import { createRunDetails, previewText, type RunDetailsTab } from "./runDetails";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { AGENTS } from "../agents/registry";
+import type { AgentId } from "../agents/types";
+import { taskLabelFor } from "../events/taskLabels";
+import type { AgentJob, RunState, TaskRecord } from "../events/types";
+import { createRunDetails, previewText, type RunDetailsTab } from "./runDetails";
 
  type RunDetailDrawerProps = {
    initialTab?: RunDetailsTab;
@@ -60,12 +60,12 @@
    return `workload-status workload-status-${task.status}`;
  }
 
- function WorkloadTaskView({ selectedTaskId, state }: { selectedTaskId?: string; state: RunState }) {
-   const task =
-     (selectedTaskId ? state.tasks.find((candidate) => candidate.taskId === selectedTaskId) : undefined) ??
-     (state.currentTask ? state.tasks.find((candidate) => candidate.taskId === state.currentTask?.taskId) : undefined) ??
-     state.tasks.find((candidate) => candidate.status !== "done" && candidate.status !== "failed") ??
-     state.tasks.at(-1);
+function WorkloadTaskView({ selectedTaskId, state }: { selectedTaskId?: string; state: RunState }) {
+  const task =
+    (selectedTaskId ? state.tasks.find((candidate) => candidate.taskId === selectedTaskId) : undefined) ??
+    state.tasks.find((candidate) => candidate.status !== "done" && candidate.status !== "failed") ??
+    (state.currentTask ? state.tasks.find((candidate) => candidate.taskId === state.currentTask?.taskId) : undefined) ??
+    state.tasks.at(-1);
 
    if (!task) {
      return (
@@ -203,7 +203,7 @@
      ? details.prompts.filter((prompt) => prompt.recipientAgentId === selectedAgentId || prompt.senderAgentId === selectedAgentId)
      : details.prompts;
    const reportList = visibleReports.slice().reverse();
-   const reportScope = `${selectedAgentId ?? "all"}:${selectedTaskId ?? "all"}:${state.timeline.length}`;
+  const reportScope = `${selectedAgentId ?? "all"}:${selectedTaskId ?? "all"}`;
    const selectedReportDetail =
      selectedReport?.scope === reportScope
        ? reportList.find((report) => reportKey(report) === selectedReport.key) ?? reportList[0]

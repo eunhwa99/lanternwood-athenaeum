@@ -3,8 +3,10 @@ import type { AgentEvent, PreviousRunContext, SpecialistAgentId } from "../event
 
 export type RunAdapterOptions = {
   previousRun?: PreviousRunContext;
+  sandboxMode?: "read-only" | "workspace-write";
   signal?: AbortSignal;
   taskId?: string;
+  workspacePath?: string;
 };
 
 export type AgentJobRequest = {
@@ -13,6 +15,7 @@ export type AgentJobRequest = {
   prompt: string;
   selectedAgentIds: SpecialistAgentId[];
   skippedAgentIds: SpecialistAgentId[];
+  specialistReports?: Partial<Record<AgentId, string>>;
   taskId: string;
 };
 

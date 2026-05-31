@@ -1,8 +1,7 @@
-import { AGENT_EVENT_TYPES, AGENT_IDS, SPECIALIST_AGENT_IDS, type AgentEvent } from "./types";
+import { AGENT_EVENT_TYPES, type AgentEvent } from "./types";
 
-const agentIds = new Set<string>(AGENT_IDS);
 const eventTypes = new Set<string>(AGENT_EVENT_TYPES);
-const specialistAgentIds = new Set<string>(SPECIALIST_AGENT_IDS);
+const agentIdPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -10,6 +9,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function isAgentId(value: unknown): value is string {
+  return typeof value === "string" && agentIdPattern.test(value);
+}
+
+function isSpecialistAgentId(value: unknown): value is string {
+  return isAgentId(value) && value !== "luma";
 }
 
 function isBoundedString(value: unknown, maxLength: number): value is string {
@@ -20,8 +27,7 @@ function hasBaseEventShape(value: Record<string, unknown>) {
   return (
     isBoundedString(value.eventId, 96) &&
     isBoundedString(value.taskId, 48) &&
-    isString(value.agentId) &&
-    agentIds.has(value.agentId) &&
+    isAgentId(value.agentId) &&
     isString(value.type) &&
     eventTypes.has(value.type) &&
     typeof value.message === "string" &&
@@ -34,8 +40,7 @@ function isPromptedPayload(payload: unknown) {
   return (
     isRecord(payload) &&
     payload.senderAgentId === "luma" &&
-    isString(payload.recipientAgentId) &&
-    specialistAgentIds.has(payload.recipientAgentId) &&
+    isSpecialistAgentId(payload.recipientAgentId) &&
     isString(payload.prompt) &&
     isString(payload.promptExcerpt) &&
     isString(payload.speechBubble)
@@ -79,10 +84,9 @@ function isSpecialistPartition(selected: unknown, skipped: unknown) {
   return (
     selected.length === selectedSet.size &&
     skipped.length === skippedSet.size &&
-    selected.every((item) => typeof item === "string" && specialistAgentIds.has(item) && !skippedSet.has(item)) &&
-    skipped.every((item) => typeof item === "string" && specialistAgentIds.has(item) && !selectedSet.has(item)) &&
-    SPECIALIST_AGENT_IDS.every((agentId) => routeSet.has(agentId)) &&
-    routeSet.size === SPECIALIST_AGENT_IDS.length
+    routeSet.size > 0 &&
+    selected.every((item) => isSpecialistAgentId(item) && !skippedSet.has(item)) &&
+    skipped.every((item) => isSpecialistAgentId(item) && !selectedSet.has(item))
   );
 }
 

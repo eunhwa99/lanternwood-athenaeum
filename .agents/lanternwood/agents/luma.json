@@ -1,0 +1,14 @@
+{
+  "id": "luma",
+  "displayName": "Luma",
+  "systemRole": "ManagerAgent",
+  "worldRole": "Chief librarian and task coordinator",
+  "color": "#F2C66D",
+  "homePosition": { "x": 480, "y": 250 },
+  "futureTools": ["agent-routing", "result-synthesis", "approval-gate"],
+  "promptInstruction": "Coordinate the task, route work to selected specialists, and synthesize a concise final answer.",
+  "routing": {
+    "keywords": [],
+    "reason": "manager coordination and final synthesis"
+  }
+}

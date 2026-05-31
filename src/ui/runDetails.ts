@@ -240,6 +240,10 @@ export function createRunDetails(state: RunState, selectedTaskId?: string): RunD
   }
 
   for (const task of scopedTasks) {
+    if (task.error && !runLog.some((item) => item.includes(task.error ?? ""))) {
+      runLog.push(`${taskLabelFor(state.tasks, task.taskId)} · Task failed: ${task.error}`);
+    }
+
     const finalOutput = state.finalOutputs[task.taskId] ?? task.finalOutput;
 
     if (!finalOutput) {

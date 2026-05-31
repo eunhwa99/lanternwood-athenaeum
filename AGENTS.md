@@ -18,6 +18,7 @@
 
 ## Verification
 
+- `npm run verify` for the full local verification set.
 - `npm run typecheck`
 - `npm test`
 - `npm run lint`

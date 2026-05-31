@@ -83,7 +83,7 @@ describe("event reducer", () => {
     expect(done.finalOutput).toBeNull();
   });
 
-  it("keeps completed task output available when a new task starts", () => {
+  it("keeps completed task output available by task when a new task starts", () => {
     const initial = createInitialRunState(AGENTS);
     const completed = reduceAgentEvent(initial, {
       ...baseEvent,
@@ -103,7 +103,7 @@ describe("event reducer", () => {
       taskId: "task-2",
     });
 
-    expect(nextTask.finalOutput).toBe("Previous synthesis");
+    expect(nextTask.finalOutput).toBeNull();
     expect(nextTask.finalOutputs["task-1"]).toBe("Previous synthesis");
     expect(nextTask.tasks.find((task) => task.taskId === "task-1")).toMatchObject({
       finalOutput: "Previous synthesis",

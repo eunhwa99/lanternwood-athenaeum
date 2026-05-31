@@ -50,19 +50,28 @@ function rosterGroupForStatus(status: AgentStatus, hasPendingJobs: boolean): Age
   return "active";
 }
 
+function hasActiveWork(state: RunState) {
+  return (
+    state.tasks.some((task) => task.status !== "done" && task.status !== "failed") ||
+    Object.values(state.agentQueues).some((jobs) => jobs.some((job) => job.status === "queued" || job.status === "running"))
+  );
+}
+
 function latestAgentOutput(state: RunState, agentId: AgentId): AgentOutputPreview | null {
   if (state.agents[agentId].status === "failed") {
     return { text: previewText(state.agents[agentId].lastMessage) };
   }
 
-  if (agentId === "luma") {
-    for (let index = state.tasks.length - 1; index >= 0; index -= 1) {
-      const task = state.tasks[index];
+  if (agentId === "luma" && !hasActiveWork(state)) {
+    const completedTasks = state.tasks
+      .filter((task) => state.finalOutputs[task.taskId] ?? task.finalOutput)
+      .sort((left, right) => Date.parse(right.completedAt ?? right.createdAt) - Date.parse(left.completedAt ?? left.createdAt));
+
+    if (completedTasks[0]) {
+      const task = completedTasks[0];
       const finalOutput = state.finalOutputs[task.taskId] ?? task.finalOutput;
 
-      if (finalOutput) {
-        return { taskLabel: taskLabelFor(state.tasks, task.taskId), text: previewText(finalOutput) };
-      }
+      return { taskLabel: taskLabelFor(state.tasks, task.taskId), text: previewText(finalOutput) };
     }
   }
 
@@ -148,6 +157,10 @@ function AgentWorkload({
 }
 
 function globalCodexStatus(state: RunState, runMode: "codex" | "mock") {
+  if (hasActiveWork(state)) {
+    return "running";
+  }
+
   if (runMode === "mock") {
     return state.currentTask ? state.agents.luma.status : "idle";
   }
@@ -185,7 +198,13 @@ export function LiveRunInspector({ onOpenDetails, runMode = "mock", state }: Liv
   );
   const diagnostics = latestDiagnostics(state);
   const permissionReviews = state.timeline.filter((event) => event.type === "permission.reviewed");
-  const traceStatus = state.agents.luma.status === "done" || state.agents.luma.status === "failed" ? state.agents.luma.status : state.currentTask ? "running trace" : "idle";
+  const traceStatus = hasActiveWork(state)
+    ? "running trace"
+    : state.agents.luma.status === "done" || state.agents.luma.status === "failed"
+      ? state.agents.luma.status
+      : state.currentTask
+        ? "running trace"
+        : "idle";
   const groupedAgents = AGENT_ROSTER_GROUPS.map((group) => ({
     ...group,
     agents: AGENTS.filter((agent) => {

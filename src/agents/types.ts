@@ -1,4 +1,4 @@
-export type AgentId = "luma" | "orion" | "neria" | "quill" | "argus";
+export type AgentId = string;
 
 export type SystemRole =
   | "ManagerAgent"
@@ -21,4 +21,9 @@ export type AgentDefinition = {
   color: string;
   homePosition: ScenePosition;
   futureTools: string[];
+  promptInstruction: string;
+  routing: {
+    keywords: string[];
+    reason: string;
+  };
 };

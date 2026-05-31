@@ -1,9 +1,8 @@
-
 import type { AgentDefinition, AgentId } from "../agents/types";
 
 export const AGENT_IDS = ["luma", "orion", "neria", "quill", "argus"] as const;
 export const SPECIALIST_AGENT_IDS = ["orion", "neria", "quill", "argus"] as const;
-export type SpecialistAgentId = (typeof SPECIALIST_AGENT_IDS)[number];
+export type SpecialistAgentId = string;
 
 export type AgentEventType =
   | "task.created"

@@ -1,11 +1,19 @@
 import { createServer, type IncomingMessage } from "node:http";
+import { join } from "node:path";
 import type { PreviousRunContext } from "../src/events/types";
 import { validateAgentEvent } from "../src/events/validation";
 import { createTaskId } from "../src/harness/taskIds";
-import { createCodexAgentJobEvents, createCodexEvents, createCodexSynthesisEvents } from "./codexWorkflow";
+import { createAgentDefinition, loadAgentDefinitions } from "./agentCatalog";
+import { createAgentDraftWithCodex } from "./agentDraft";
+import { createCodexAgentJobEvents, createCodexEvents, createCodexServerFailureEvent, createCodexSynthesisEvents } from "./codexWorkflow";
 import { loadDotEnvFile } from "./env";
+import { codexRequestTokenHeader, dashboardCorsOrigin, validateCodexPostRequest } from "./httpGuards";
+import { loadGlobalAgents } from "./globalAgents";
 import { validatePreviousRun } from "./requestValidation";
+import { discoverCodexSkills } from "./skills";
 import { encodeAgentEvent } from "./sse";
+import { readWorkspaceMetadata } from "./workspaceMetadata";
+import { discoverWorkspaceOptions, resolveWorkspacePath } from "./workspaces";
 
 loadDotEnvFile();
 
@@ -13,10 +21,12 @@ const port = Number(process.env.LANTERNWOOD_CODEX_PORT ?? 8787);
 const healthToken = process.env.LANTERNWOOD_CODEX_HEALTH_TOKEN;
 const maxBodyBytes = 128 * 1024;
 
-type SpecialistId = "argus" | "neria" | "orion" | "quill";
+type SpecialistId = string;
 
-const specialistIds = new Set<SpecialistId>(["argus", "neria", "orion", "quill"]);
+const agentIdPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const codexRoutes = new Set(["/api/runs", "/api/agent-jobs", "/api/synthesis"]);
+const agentAuthoringRoutes = new Set(["/api/agents", "/api/agents/draft"]);
+const workspaceRoutes = new Set(["/api/workspace-metadata", "/api/workspaces"]);
 
 function requestPath(url: string | undefined) {
   return url?.split("?")[0]?.replace(/\/+$/, "") || "/";
@@ -43,7 +53,7 @@ async function readJsonBody(request: IncomingMessage) {
 }
 
 function validateSpecialistId(value: unknown): SpecialistId | undefined {
-  return typeof value === "string" && specialistIds.has(value as SpecialistId) ? (value as SpecialistId) : undefined;
+  return typeof value === "string" && value !== "luma" && agentIdPattern.test(value) ? value : undefined;
 }
 
 function validateSpecialistIds(value: unknown): SpecialistId[] {
@@ -62,10 +72,9 @@ function validateReports(value: unknown): Partial<Record<SpecialistId, string>> 
   const record = value as Record<string, unknown>;
   const reports: Partial<Record<SpecialistId, string>> = {};
 
-  for (const agentId of specialistIds) {
-    const report = record[agentId];
+  for (const [agentId, report] of Object.entries(record)) {
 
-    if (typeof report === "string") {
+    if (validateSpecialistId(agentId) && typeof report === "string") {
       reports[agentId] = report;
     }
   }
@@ -74,9 +83,12 @@ function validateReports(value: unknown): Partial<Record<SpecialistId, string>> 
 }
 
 const server = createServer(async (request, response) => {
-  response.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  const requestOrigin = request.headers.origin;
+
+  response.setHeader("Access-Control-Allow-Headers", `Content-Type, X-Lanternwood-Codex-Token`);
   response.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  response.setHeader("Access-Control-Allow-Origin", "http://127.0.0.1:5173");
+  response.setHeader("Access-Control-Allow-Origin", dashboardCorsOrigin(requestOrigin));
+  response.setHeader("Vary", "Origin");
 
   if (request.method === "OPTIONS") {
     response.writeHead(204);
@@ -92,22 +104,99 @@ const server = createServer(async (request, response) => {
 
   const path = requestPath(request.url);
 
-  if (request.method !== "POST" || !codexRoutes.has(path)) {
+  if (request.method !== "POST" || (!codexRoutes.has(path) && !agentAuthoringRoutes.has(path) && !workspaceRoutes.has(path))) {
     response.writeHead(404, { "Content-Type": "text/plain" });
     response.end("Not found");
+    return;
+  }
+
+  const guard = validateCodexPostRequest({
+    contentType: request.headers["content-type"],
+    expectedToken: healthToken,
+    origin: requestOrigin,
+    token: request.headers[codexRequestTokenHeader] as string | undefined,
+  });
+
+  if (!guard.ok) {
+    response.writeHead(guard.status, { "Content-Type": "text/plain" });
+    response.end(guard.message);
     return;
   }
 
   let input = "";
   let previousRun: PreviousRunContext | undefined;
   let body: Record<string, unknown>;
+  let workspacePath: string | undefined;
+  let globalAgents: Awaited<ReturnType<typeof loadGlobalAgents>> | undefined;
   try {
     body = await readJsonBody(request);
+    if (path === "/api/agents/draft") {
+      const description = typeof body.description === "string" ? body.description : "";
+      const agents = await loadAgentDefinitions();
+      const draft = await createAgentDraftWithCodex(description, {
+        existingAgentIds: agents.map((agent) => agent.id),
+        workspacePath: process.cwd(),
+      });
+
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ draft }));
+      return;
+    }
+
+    if (path === "/api/agents") {
+      const created = await createAgentDefinition(join(process.cwd(), ".agents", "lanternwood", "agents"), {
+        color: typeof body.color === "string" ? body.color : "",
+        displayName: typeof body.displayName === "string" ? body.displayName : "",
+        id: typeof body.id === "string" ? body.id : "",
+        persona: typeof body.persona === "string" ? body.persona : "",
+        promptInstruction: typeof body.promptInstruction === "string" ? body.promptInstruction : "",
+        routingKeywords: Array.isArray(body.routingKeywords)
+          ? body.routingKeywords.filter((keyword): keyword is string => typeof keyword === "string")
+          : [],
+        routingReason: typeof body.routingReason === "string" ? body.routingReason : "",
+        worldRole: typeof body.worldRole === "string" ? body.worldRole : "",
+      });
+
+      response.writeHead(201, { "Content-Type": "application/json" });
+      response.end(JSON.stringify(created));
+      return;
+    }
+
+    if (path === "/api/workspaces") {
+      globalAgents = await loadGlobalAgents();
+      const discovered = await discoverWorkspaceOptions(globalAgents.automationPolicy.allowRoots);
+
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(
+        JSON.stringify({
+          ...discovered,
+          currentWorkspace: process.cwd(),
+        }),
+      );
+      return;
+    }
+
+    if (path === "/api/workspace-metadata") {
+      globalAgents = await loadGlobalAgents();
+      const requestedWorkspacePath =
+        typeof body.workspacePath === "string" && body.workspacePath.trim() ? body.workspacePath : process.cwd();
+      const resolvedWorkspacePath = await resolveWorkspacePath(requestedWorkspacePath, globalAgents.automationPolicy.allowRoots);
+      const [metadata, skills] = await Promise.all([readWorkspaceMetadata(resolvedWorkspacePath), discoverCodexSkills()]);
+
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ metadata, skills }));
+      return;
+    }
+
     input = typeof body.input === "string" ? body.input.trim() : "";
     previousRun = validatePreviousRun(body.previousRun);
+    if (typeof body.workspacePath === "string" && body.workspacePath.trim()) {
+      globalAgents = await loadGlobalAgents();
+      workspacePath = await resolveWorkspacePath(body.workspacePath, globalAgents.automationPolicy.allowRoots);
+    }
   } catch {
     response.writeHead(400, { "Content-Type": "text/plain" });
-    response.end("Invalid JSON body or previousRun");
+    response.end("Invalid JSON body, previousRun, or workspacePath");
     return;
   }
 
@@ -130,8 +219,12 @@ const server = createServer(async (request, response) => {
     }
   });
 
+  let taskId = createTaskId(input);
+
   try {
-    const taskId = typeof body.taskId === "string" && body.taskId.trim() ? body.taskId.trim() : createTaskId(input);
+    taskId = typeof body.taskId === "string" && body.taskId.trim() ? body.taskId.trim() : taskId;
+    const agents = await loadAgentDefinitions();
+    const sandboxMode = body.sandboxMode === "workspace-write" ? "workspace-write" : "read-only";
     const events =
       path === "/api/agent-jobs"
         ? (() => {
@@ -145,10 +238,12 @@ const server = createServer(async (request, response) => {
               {
                 agentId,
                 input,
+                selectedAgentIds: Array.isArray(body.selectedAgentIds) ? validateSpecialistIds(body.selectedAgentIds) : undefined,
+                specialistReports: validateReports(body.reports),
                 taskId,
               },
               undefined,
-              { previousRun, signal: abortController.signal },
+              { agents, globalAgents, previousRun, sandboxMode, signal: abortController.signal, workspacePath },
             );
           })()
         : path === "/api/synthesis"
@@ -160,9 +255,17 @@ const server = createServer(async (request, response) => {
                 taskId,
               },
               undefined,
-              { previousRun, signal: abortController.signal },
+              { agents, globalAgents, previousRun, sandboxMode, signal: abortController.signal, workspacePath },
             )
-          : createCodexEvents(input, undefined, { previousRun, signal: abortController.signal, taskId });
+          : createCodexEvents(input, undefined, {
+              agents,
+              globalAgents,
+              previousRun,
+              sandboxMode,
+              signal: abortController.signal,
+              taskId,
+              workspacePath,
+            });
 
     for await (const event of events) {
       if (abortController.signal.aborted) {
@@ -175,23 +278,7 @@ const server = createServer(async (request, response) => {
     if (!abortController.signal.aborted && !response.destroyed) {
       response.write(
         encodeAgentEvent(
-          validateAgentEvent(
-            {
-              agentId: "luma",
-              eventId: `${createTaskId(input)}-server-error`,
-              message: error instanceof Error ? error.message : "Codex workflow stream failed",
-              payload: {
-                backend: "connected",
-                cliCommand: "codex exec",
-                codexStatus: "failed",
-                runMode: "codex",
-              },
-              taskId: createTaskId(input),
-              timestamp: new Date().toISOString(),
-              type: "agent.failed",
-            },
-            "Invalid AgentEvent from Codex workflow",
-          ),
+          validateAgentEvent(createCodexServerFailureEvent(taskId, error), "Invalid AgentEvent from Codex workflow"),
         ),
       );
     }

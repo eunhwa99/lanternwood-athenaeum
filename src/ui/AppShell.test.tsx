@@ -1,5 +1,5 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentId } from "../agents/types";
 import type { AgentEvent } from "../events/types";
 import { mockRunAdapter } from "../harness/mockRunAdapter";
@@ -7,629 +7,1264 @@ import type { RunAdapter } from "../harness/runAdapter";
 import { renderApp } from "../test/render";
 import { AppShell } from "./AppShell";
 
-vi.mock("../world/LanternwoodScene", () => ({
-  LanternwoodScene: ({
-    runEpoch,
-    state,
-  }: {
-    runEpoch: number;
-    state: { agents: { luma: { status: string } }; timeline: unknown[] };
-  }) => (
-    <div data-testid="lanternwood-scene">
-      <span>scene-luma-{state.agents.luma.status}</span>
-      <span>scene-events-{state.timeline.length}</span>
-      <span>scene-run-{runEpoch}</span>
-    </div>
-  ),
-}));
-
-function event(
-  taskId: string,
-  index: number,
-  agentId: AgentEvent["agentId"],
-  type: AgentEvent["type"],
-  message: string,
-  payload?: AgentEvent["payload"],
-): AgentEvent {
-  return {
-    agentId,
-    eventId: `${taskId}-test-${index}`,
-    message,
-    payload,
-    taskId,
-    timestamp: `2026-05-28T00:00:0${index}.000Z`,
-    type,
-  } as AgentEvent;
-}
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-
-  return { promise, resolve };
-}
-
-describe("AppShell", () => {
-  it("shows compact Codex diagnostics without the old visible timeline", () => {
-    renderApp(<AppShell runAdapter={mockRunAdapter} runMode="codex" />);
-
-    const inspector = screen.getByRole("region", { name: "Live run inspector" });
-    expect(inspector).toHaveTextContent(/Mode\s*codex/);
-    expect(inspector).toHaveTextContent(/Codex\s*idle/);
-    expect(inspector).toHaveTextContent(/Events\s*0/);
-    expect(screen.queryByRole("region", { name: "Event timeline" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("region", { name: "Final output" })).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Agents summary")).toHaveTextContent("Luma: idle");
-    expect(screen.getByText("Luma: idle")).toHaveStyle({ "--agent-color": "#f2c66d" });
-
-    expect(screen.queryByRole("button", { name: "Open raw Codex details" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Open run log" }));
-    expect(screen.getByRole("dialog", { name: "Run details" })).toHaveTextContent("No run log entries captured yet.");
-  });
-
-  it("surfaces Codex backend diagnostics when the live adapter fails before streaming", async () => {
-    const failingRunAdapter: RunAdapter = {
-      startRun: () =>
-        ({
-          [Symbol.asyncIterator]() {
-            return {
-              next: async () => {
-                throw new Error("Codex CLI run failed: backend unavailable");
-              },
-            };
-          },
-        }),
-    };
-
-    renderApp(<AppShell runAdapter={failingRunAdapter} runMode="codex" />);
-
-    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Draft a focused project plan" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
-
-    await waitFor(() => {
-      const inspector = screen.getByRole("region", { name: "Live run inspector" });
-      expect(inspector).toHaveTextContent(/Backend\s*unavailable/);
-      expect(inspector).toHaveTextContent(/CLI\s*codex exec/);
-      expect(inspector).toHaveTextContent(/Model\s*Codex CLI backend unavailable/);
-    });
-  });
-
-  it("runs the mock flow through compact cards and opens final/log details", async () => {
-    renderApp(<AppShell runAdapter={mockRunAdapter} />);
-
-    fireEvent.change(screen.getByLabelText("Task request"), {
-      target: { value: "Review this code and verify risky edge cases" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
-
-    await screen.findAllByText("Here is the focused plan synthesized from Orion and Argus.");
-
-    expect(screen.getByText("scene-events-14")).toBeInTheDocument();
-    expect(screen.getByLabelText("Agents summary")).toHaveTextContent("Argus: done");
-    expect(screen.queryByRole("region", { name: "Routing decision" })).not.toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Live run inspector" })).toHaveTextContent(
-      "Research brief: focus the plan around the highest-risk milestone first.",
-    );
-    expect(screen.getByRole("button", { name: "View Orion details" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "View Orion details" }));
-    expect(screen.getByRole("dialog", { name: "Run details" })).toHaveTextContent("Orion Details");
-    expect(screen.getByRole("dialog", { name: "Run details" })).toHaveTextContent("T1");
-    expect(screen.getByRole("dialog", { name: "Run details" })).toHaveTextContent(
-      "Research brief: focus the plan around the highest-risk milestone first.",
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
-
-    expect(screen.queryByRole("button", { name: "Open full final output" })).not.toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Work queue" })).toHaveTextContent("T1");
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Open final output for T1 Review this code and verify risky edge cases",
-      }),
-    );
-    expect(screen.queryByRole("tab", { name: "Final output" })).not.toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Agent reports" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("dialog", { name: "Run details" })).toHaveTextContent("Luma Details");
-    expect(screen.getByRole("dialog", { name: "Run details" })).toHaveTextContent(
-      "Here is the focused plan synthesized from Orion and Argus.",
-    );
-    expect(screen.getByRole("dialog", { name: "Run details" })).toHaveTextContent("T1");
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
-
-    fireEvent.click(screen.getByRole("button", { name: "Open run log" }));
-    fireEvent.click(screen.getByRole("tab", { name: "Routing" }));
-    expect(screen.getByRole("dialog", { name: "Run details" })).toHaveTextContent("Selected agents: Orion, Argus");
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
-
-    fireEvent.click(screen.getByRole("button", { name: "Open run log" }));
-    expect(screen.getByRole("dialog", { name: "Run details" })).toHaveTextContent(
-      "Luma -> Orion: Orion, focus the plan around the highest-risk milestone first.",
-    );
-  });
-
-  it("stores successful run context and forwards it to the next run", async () => {
-    const seenPreviousRuns: unknown[] = [];
-    const contextRunAdapter: RunAdapter = {
-      async *startRun(input, options) {
-        seenPreviousRuns.push(options?.previousRun);
-        yield {
-          agentId: "luma",
-          eventId: `${input}-1`,
-          message: input,
-          taskId: `task-${input}`,
-          timestamp: "2026-05-26T00:00:00.000Z",
-          type: "task.created",
-        };
-        yield {
-          agentId: "orion",
-          eventId: `${input}-2`,
-          message: "Orion returns research findings",
-          payload: { report: "Research complete" },
-          taskId: `task-${input}`,
-          timestamp: "2026-05-26T00:00:01.000Z",
-          type: "agent.reporting",
-        };
-        yield {
-          agentId: "argus",
-          eventId: `${input}-3`,
-          message: "Argus returns review notes",
-          payload: { report: "Review complete" },
-          taskId: `task-${input}`,
-          timestamp: "2026-05-26T00:00:02.000Z",
-          type: "agent.reporting",
-        };
-        yield {
-          agentId: "luma",
-          eventId: `${input}-4`,
-          message: "Luma places the final summary on the central desk",
-          payload: { finalOutput: `Final for ${input}` },
-          taskId: `task-${input}`,
-          timestamp: "2026-05-26T00:00:03.000Z",
-          type: "agent.done",
-        };
-      },
-    };
-
-    renderApp(<AppShell runAdapter={contextRunAdapter} />);
-
-    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "First prompt" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
-    await screen.findAllByText("Final for First prompt");
-
-    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Who worked on that?" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
-
-    await waitFor(() => {
-      expect(seenPreviousRuns[1]).toMatchObject({
-        delegatedAgents: ["Orion", "Argus"],
-        finalOutput: "Final for First prompt",
-        prompt: "First prompt",
-        taskId: "task-First prompt",
-      });
-    });
-  });
-
-  it("increments the scene run epoch even when the same prompt is submitted again", async () => {
-    renderApp(<AppShell runAdapter={mockRunAdapter} />);
-
-    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "What is Luma?" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
-    await screen.findAllByText("This request is simple enough for Luma to answer directly without specialist routing.");
-    expect(screen.getByText("scene-run-1")).toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "What is Luma?" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
-
-    await waitFor(() => expect(screen.getByText("scene-run-2")).toBeInTheDocument());
-  });
-
-  it("marks active specialists failed when a stream throws while preserving reported output", async () => {
-    const reportingThenFailingRunAdapter: RunAdapter = {
-      async *startRun() {
-        yield {
-          agentId: "luma",
-          eventId: "task-1-client-1",
-          message: "Draft a focused project plan",
-          taskId: "task-1",
-          timestamp: "2026-05-26T00:00:00.000Z",
-          type: "task.created",
-        };
-        yield {
-          agentId: "orion",
-          eventId: "task-1-client-2",
-          message: "Orion returns research findings",
-          payload: { report: "Research complete" },
-          taskId: "task-1",
-          timestamp: "2026-05-26T00:00:01.000Z",
-          type: "agent.reporting",
-        };
-        yield {
-          agentId: "neria",
-          eventId: "task-1-client-3",
-          message: "Neria is working",
-          taskId: "task-1",
-          timestamp: "2026-05-26T00:00:02.000Z",
-          type: "agent.working",
-        };
-        throw new Error("Stream interrupted");
-      },
-    };
-
-    renderApp(<AppShell runAdapter={reportingThenFailingRunAdapter} />);
-
-    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Draft a focused project plan" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
-
-    await waitFor(() => {
-      expect(screen.getAllByText("Stream interrupted").length).toBeGreaterThan(0);
-    });
-    expect(screen.getByText("Research complete")).toBeInTheDocument();
-    expect(screen.queryByText("Orion's route closed after the stream failed")).not.toBeInTheDocument();
-    expect(screen.getAllByText("Route closed after the stream failed").length).toBeGreaterThan(0);
-  });
-
-  it("marks unfinished specialists failed when the backend sends terminal Luma failure", async () => {
-    const terminalFailureRunAdapter: RunAdapter = {
-      async *startRun() {
-        yield {
-          agentId: "luma",
-          eventId: "task-1-client-1",
-          message: "Draft a focused project plan",
-          taskId: "task-1",
-          timestamp: "2026-05-26T00:00:00.000Z",
-          type: "task.created",
-        };
-        yield {
-          agentId: "orion",
-          eventId: "task-1-client-2",
-          message: "Orion returns research findings",
-          payload: { report: "Research complete" },
-          taskId: "task-1",
-          timestamp: "2026-05-26T00:00:01.000Z",
-          type: "agent.reporting",
-        };
-        yield {
-          agentId: "neria",
-          eventId: "task-1-client-3",
-          message: "Neria is working",
-          taskId: "task-1",
-          timestamp: "2026-05-26T00:00:02.000Z",
-          type: "agent.working",
-        };
-        yield {
-          agentId: "luma",
-          eventId: "task-1-client-4",
-          message: "Codex workflow stream failed",
-          taskId: "task-1",
-          timestamp: "2026-05-26T00:00:03.000Z",
-          type: "agent.failed",
-        };
-      },
-    };
-
-    renderApp(<AppShell runAdapter={terminalFailureRunAdapter} />);
-
-    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Draft a focused project plan" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
-
-    await waitFor(() => {
-      expect(screen.getAllByText("Route closed after Luma reported a run failure").length).toBeGreaterThan(0);
-    });
-    expect(screen.getByText("Research complete")).toBeInTheDocument();
-  });
-
-  it("lets the user stop an in-flight run through the adapter abort signal", async () => {
-    let seenSignal: AbortSignal | undefined;
-    const stoppingRunAdapter: RunAdapter = {
-      async *startRun(_input, options) {
-        seenSignal = options?.signal;
-        yield {
-          agentId: "luma",
-          eventId: "task-stop-1",
-          message: "Draft a focused project plan",
-          taskId: "task-stop",
-          timestamp: "2026-05-26T00:00:00.000Z",
-          type: "task.created",
-        };
-        yield {
-          agentId: "orion",
-          eventId: "task-stop-2",
-          message: "Orion is working",
-          taskId: "task-stop",
-          timestamp: "2026-05-26T00:00:01.000Z",
-          type: "agent.working",
-        };
-        await new Promise<void>((resolve) => options?.signal?.addEventListener("abort", () => resolve(), { once: true }));
-        throw new Error("Run aborted");
-      },
-    };
-
-    renderApp(<AppShell runAdapter={stoppingRunAdapter} />);
-
-    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Draft a focused project plan" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
-
-    await screen.findByText("Orion is working");
-    fireEvent.click(screen.getByRole("button", { name: "Stop run" }));
-
-    await waitFor(() => {
-      expect(seenSignal?.aborted).toBe(true);
-      expect(screen.getAllByText("Run aborted").length).toBeGreaterThan(0);
-    });
-  });
-
-  it("keeps raw Codex responses out of the user-facing drawer", async () => {
-    const diagnosticRunAdapter: RunAdapter = {
-      async *startRun() {
-        yield {
-          agentId: "luma",
-          eventId: "task-1-client-1",
-          message: "Draft a focused project plan",
-          taskId: "task-1",
-          timestamp: "2026-05-26T00:00:00.000Z",
-          type: "task.created",
-        };
-        yield {
-          agentId: "orion",
-          eventId: "task-1-client-2",
-          message: "Orion returns research findings",
-          payload: {
-            rawResponse: "Raw /Users/eunhwa/private/output",
-            report: "Research output from Orion",
-          },
-          taskId: "task-1",
-          timestamp: "2026-05-26T00:00:01.000Z",
-          type: "agent.reporting",
-        };
-      },
-    };
-
-    renderApp(<AppShell runAdapter={diagnosticRunAdapter} runMode="codex" />);
-
-    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Draft a focused project plan" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
-
-    await screen.findByText("Research output from Orion");
-    expect(screen.queryByRole("button", { name: "Open raw Codex details" })).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "View Orion details" }));
-    const drawer = screen.getByRole("dialog", { name: "Run details" });
-    expect(drawer).toHaveTextContent("Research output from Orion");
-    expect(drawer).not.toHaveTextContent("[redacted-path]");
-    expect(drawer).not.toHaveTextContent("/Users/eunhwa/private");
-  });
-
-  it("queues new tasks while agents work and opens task-specific final outputs", async () => {
-    const gates = new Map<string, ReturnType<typeof deferred>>();
-    const startedJobs: string[] = [];
-    const queueRunAdapter = {
-      startRun() {
-        throw new Error("legacy single-run adapter should not be used in queue mode");
-      },
-      async *startAgentJob(job: { agentId: AgentId; taskId: string }) {
-        const gate = deferred();
-        gates.set(`${job.agentId}:${job.taskId}`, gate);
-        startedJobs.push(`${job.agentId}:${job.taskId}`);
-        yield event(job.taskId, 1, job.agentId, job.agentId === "argus" ? "agent.reviewing" : "agent.working", `${job.agentId} starts ${job.taskId}`);
-        await gate.promise;
-        yield event(job.taskId, 2, job.agentId, "agent.reporting", `${job.agentId} reports ${job.taskId}`, {
-          report: `${job.agentId} report for ${job.taskId}`,
-        });
-      },
-      async *synthesizeTask(task: { prompt: string; reports: Partial<Record<AgentId, string>>; taskId: string }) {
-        yield event(task.taskId, 3, "luma", "agent.working", `Luma synthesizes ${task.taskId}`);
-        yield event(task.taskId, 4, "luma", "agent.done", `Luma completes ${task.taskId}`, {
-          finalOutput: `Final for ${task.prompt}: ${Object.values(task.reports).join(" | ")}`,
-        });
-      },
-    } as RunAdapter;
-
-    renderApp(<AppShell runAdapter={queueRunAdapter} />);
-
-    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Research current sources" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
-    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Rewrite this paragraph" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
-
-    await waitFor(() => {
-      expect(startedJobs.some((job) => job.startsWith("orion:"))).toBe(true);
-      expect(startedJobs.some((job) => job.startsWith("quill:"))).toBe(true);
-    });
-    expect(screen.getByRole("button", { name: "Send to Queue" })).toBeEnabled();
-    expect(screen.getByRole("region", { name: "Work queue" })).toHaveTextContent("Research current sources");
-    expect(screen.getByRole("region", { name: "Work queue" })).toHaveTextContent("Rewrite this paragraph");
-    expect(screen.getByRole("region", { name: "Active tasks" })).toHaveTextContent("T1");
-    expect(screen.getByRole("region", { name: "Active tasks" })).toHaveTextContent("T2");
-
-    for (const gate of gates.values()) {
-      gate.resolve();
-    }
-    await screen.findAllByText(/Final for Research current sources/);
-    await screen.findAllByText(/Final for Rewrite this paragraph/);
-    expect(screen.getByRole("region", { name: "Completed tasks" })).toHaveTextContent("T1");
-    expect(screen.getByRole("region", { name: "Completed tasks" })).toHaveTextContent("T2");
-
-    fireEvent.click(screen.getByRole("button", { name: "Open final output for T2 Rewrite this paragraph" }));
-    const drawer = screen.getByRole("dialog", { name: "Run details" });
-    expect(screen.queryByRole("tab", { name: "Final output" })).not.toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Agent reports" })).toHaveAttribute("aria-selected", "true");
-    expect(drawer).toHaveTextContent("Luma Details");
-    expect(drawer).toHaveTextContent("Final for Rewrite this paragraph");
-    expect(drawer).toHaveTextContent("T2");
-    expect(drawer).not.toHaveTextContent("Final for Research current sources");
-    expect(drawer).not.toHaveTextContent("orion report");
-  });
-
-  it("keeps completed queue items to a recent preview with an explicit history expansion", async () => {
-    const queueRunAdapter = {
-      startRun() {
-        throw new Error("legacy single-run adapter should not be used in queue mode");
-      },
-      async *startAgentJob(job: { agentId: AgentId; taskId: string }) {
-        throw new Error("direct Luma tasks should not start specialist jobs");
-        yield event(job.taskId, 1, job.agentId, "agent.failed", "unreachable");
-      },
-      async *synthesizeTask(task: { prompt: string; taskId: string }) {
-        yield event(task.taskId, 1, "luma", "agent.done", `Luma completes ${task.prompt}`, {
-          finalOutput: `Final for ${task.prompt}`,
-        });
-      },
-    } as RunAdapter;
-
-    renderApp(<AppShell runAdapter={queueRunAdapter} />);
-
-    for (let index = 1; index <= 6; index += 1) {
-      fireEvent.change(screen.getByLabelText("Task request"), { target: { value: `What is Luma ${index}?` } });
-      fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
-    }
-
-    await screen.findAllByText(/Final for What is Luma 6/);
-
-    const completedTasks = screen.getByRole("region", { name: "Completed tasks" });
-    expect(completedTasks).toHaveTextContent("T6");
-    expect(completedTasks).toHaveTextContent("T2");
-    expect(completedTasks).not.toHaveTextContent("T1");
-    expect(screen.getByRole("button", { name: "Show all completed tasks" })).toHaveTextContent("1 older");
-
-    fireEvent.click(screen.getByRole("button", { name: "Show all completed tasks" }));
-
-    expect(completedTasks).toHaveTextContent("T1");
-  });
-
-  it("keeps same-agent jobs queued until that agent finishes its active job", async () => {
-    const gates = new Map<string, ReturnType<typeof deferred>>();
-    const startedJobs: string[] = [];
-    const queueRunAdapter = {
-      startRun() {
-        throw new Error("legacy single-run adapter should not be used in queue mode");
-      },
-      async *startAgentJob(job: { agentId: AgentId; taskId: string }) {
-        const gate = deferred();
-        gates.set(`${job.agentId}:${job.taskId}`, gate);
-        startedJobs.push(`${job.agentId}:${job.taskId}`);
-        yield event(job.taskId, 1, job.agentId, "agent.working", `${job.agentId} starts ${job.taskId}`);
-        await gate.promise;
-        yield event(job.taskId, 2, job.agentId, "agent.reporting", `${job.agentId} reports ${job.taskId}`, {
-          report: `${job.agentId} report for ${job.taskId}`,
-        });
-      },
-      async *synthesizeTask(task: { prompt: string; reports: Partial<Record<AgentId, string>>; taskId: string }) {
-        yield event(task.taskId, 3, "luma", "agent.done", `Luma completes ${task.taskId}`, {
-          finalOutput: `Final for ${task.prompt}`,
-        });
-      },
-    } as RunAdapter;
-
-    renderApp(<AppShell runAdapter={queueRunAdapter} />);
-
-    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Research first topic" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
-    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Research second topic" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
-
-    await waitFor(() => expect(startedJobs.filter((job) => job.startsWith("orion:"))).toHaveLength(1));
-    const firstOrionJob = startedJobs.find((job) => job.startsWith("orion:"));
-    expect(firstOrionJob).toBeDefined();
-    gates.get(firstOrionJob!)?.resolve();
-
-    await waitFor(() => expect(startedJobs.filter((job) => job.startsWith("orion:"))).toHaveLength(2));
-  });
-
-  it("stops queued work without starting the next same-agent job", async () => {
-    const startedJobs: string[] = [];
-    const queueRunAdapter = {
-      startRun() {
-        throw new Error("legacy single-run adapter should not be used in queue mode");
-      },
-      async *startAgentJob(job: { agentId: AgentId; taskId: string }, options?: { signal?: AbortSignal }) {
-        startedJobs.push(`${job.agentId}:${job.taskId}`);
-        yield event(job.taskId, 1, job.agentId, "agent.working", `${job.agentId} starts ${job.taskId}`);
-        await new Promise<void>((resolve) => options?.signal?.addEventListener("abort", () => resolve(), { once: true }));
-        throw new Error("Run aborted");
-      },
-      async *synthesizeTask(task: { prompt: string; taskId: string }) {
-        yield event(task.taskId, 3, "luma", "agent.done", `Luma completes ${task.taskId}`, {
-          finalOutput: `Final for ${task.prompt}`,
-        });
-      },
-    } as RunAdapter;
-
-    renderApp(<AppShell runAdapter={queueRunAdapter} />);
-
-    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Research first topic" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
-    fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Research second topic" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
-
-    await waitFor(() => expect(startedJobs.filter((job) => job.startsWith("orion:"))).toHaveLength(1));
-    fireEvent.click(screen.getByRole("button", { name: "Stop run" }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("region", { name: "Work queue" })).toHaveTextContent("failed");
-      expect(startedJobs.filter((job) => job.startsWith("orion:"))).toHaveLength(1);
-    });
-  });
-
-  it("summarizes the current task's active agent work in the dashboard header", async () => {
-    const gates = new Map<string, ReturnType<typeof deferred>>();
-    const currentTaskRunAdapter = {
-      startRun() {
-        throw new Error("legacy single-run adapter should not be used in queue mode");
-      },
-      async *startAgentJob(job: { agentId: AgentId; taskId: string }) {
-        const gate = deferred();
-        gates.set(`${job.agentId}:${job.taskId}`, gate);
-        yield event(
-          job.taskId,
-          1,
-          job.agentId,
-          job.agentId === "argus" ? "agent.reviewing" : "agent.working",
-          `${job.agentId} starts ${job.taskId}`,
-        );
-        await gate.promise;
-        yield event(job.taskId, 2, job.agentId, "agent.reporting", `${job.agentId} reports ${job.taskId}`, {
-          report: `${job.agentId} report for ${job.taskId}`,
-        });
-      },
-      async *synthesizeTask(task: { prompt: string; taskId: string }) {
-        yield event(task.taskId, 3, "luma", "agent.done", `Luma completes ${task.taskId}`, {
-          finalOutput: `Final for ${task.prompt}`,
-        });
-      },
-    } as RunAdapter;
-
-    renderApp(<AppShell runAdapter={currentTaskRunAdapter} />);
-
-    fireEvent.change(screen.getByLabelText("Task request"), {
-      target: { value: "Review this code and verify risky edge cases" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
-
-    const currentTask = screen.getByRole("region", { name: "Current task" });
-
-    await waitFor(() => {
-      expect(currentTask).toHaveTextContent("T1");
-      expect(currentTask).toHaveTextContent("Review this code and verify risky edge cases");
-      expect(currentTask).toHaveTextContent("Orion");
-      expect(currentTask).toHaveTextContent("working");
-      expect(currentTask).toHaveTextContent("Argus");
-      expect(currentTask).toHaveTextContent("reviewing");
-    });
-
-    fireEvent.click(within(currentTask).getByRole("button", { name: "View current task activity" }));
-    const drawer = screen.getByRole("dialog", { name: "Run details" });
-
-    expect(screen.getByRole("tab", { name: "Workload" })).toHaveAttribute("aria-selected", "true");
-    expect(within(drawer).getByRole("region", { name: "Current task workload" })).toHaveTextContent("T1");
-    expect(drawer).toHaveTextContent("Orion");
-    expect(drawer).toHaveTextContent("Argus");
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
-
-    for (const gate of gates.values()) {
-      gate.resolve();
-    }
-
-    await screen.findAllByText(/Final for Review this code and verify risky edge cases/);
-  });
-});
+ vi.mock("../world/LanternwoodScene", () => ({
+   LanternwoodScene: ({
+     runEpoch,
+     state,
+   }: {
+     runEpoch: number;
+     state: { agents: { luma: { status: string } }; timeline: unknown[] };
+   }) => (
+     <div data-testid="lanternwood-scene">
+       <span>scene-luma-{state.agents.luma.status}</span>
+       <span>scene-events-{state.timeline.length}</span>
+       <span>scene-run-{runEpoch}</span>
+     </div>
+   ),
+ }));
+
+ afterEach(() => {
+   window.localStorage.clear();
+   vi.unstubAllGlobals();
+ });
+
+ function event(
+   taskId: string,
+   index: number,
+   agentId: AgentEvent["agentId"],
+   type: AgentEvent["type"],
+   message: string,
+   payload?: AgentEvent["payload"],
+ ): AgentEvent {
+   return {
+     agentId,
+     eventId: `${taskId}-test-${index}`,
+     message,
+     payload,
+     taskId,
+     timestamp: `2026-05-28T00:00:0${index}.000Z`,
+     type,
+   } as AgentEvent;
+ }
+
+ function deferred() {
+   let resolve!: () => void;
+   const promise = new Promise<void>((done) => {
+     resolve = done;
+   });
+
+   return { promise, resolve };
+ }
+
+ describe("AppShell", () => {
+   it("shows compact Codex diagnostics without the old visible timeline", () => {
+     renderApp(<AppShell runAdapter={mockRunAdapter} runMode="codex" />);
+
+     const inspector = screen.getByRole("region", { name: "Live run inspector" });
+     expect(inspector).toHaveTextContent(/Mode\s*codex/);
+     expect(inspector).toHaveTextContent(/Codex\s*idle/);
+     expect(inspector).toHaveTextContent(/Events\s*0/);
+     expect(screen.queryByRole("region", { name: "Event timeline" })).not.toBeInTheDocument();
+     expect(screen.queryByRole("region", { name: "Final output" })).not.toBeInTheDocument();
+     expect(screen.getByLabelText("Agents summary")).toHaveTextContent("Luma: idle");
+     expect(screen.getByText("Luma: idle")).toHaveStyle({ "--agent-color": "#f2c66d" });
+
+     expect(screen.queryByRole("button", { name: "Open raw Codex details" })).not.toBeInTheDocument();
+     fireEvent.click(screen.getByRole("button", { name: "Open run log" }));
+     expect(screen.getByRole("dialog", { name: "Run details" })).toHaveTextContent("No run log entries captured yet.");
+   });
+
+   it("surfaces Codex backend diagnostics when the live adapter fails before streaming", async () => {
+     const failingRunAdapter: RunAdapter = {
+       startRun: () =>
+         ({
+           [Symbol.asyncIterator]() {
+             return {
+               next: async () => {
+                 throw new Error("Codex CLI run failed: backend unavailable");
+               },
+             };
+           },
+         }),
+     };
+
+     renderApp(<AppShell runAdapter={failingRunAdapter} runMode="codex" />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Draft a focused project plan" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     await waitFor(() => {
+       const inspector = screen.getByRole("region", { name: "Live run inspector" });
+       expect(inspector).toHaveTextContent(/Backend\s*unavailable/);
+       expect(inspector).toHaveTextContent(/CLI\s*codex exec/);
+       expect(inspector).toHaveTextContent(/Model\s*Codex CLI backend unavailable/);
+     });
+   });
+
+   it("disables the task input while a non-queued adapter run is active", async () => {
+     const gate = deferred();
+     const runAdapter: RunAdapter = {
+       async *startRun(input) {
+         yield event(`task-${input}`, 1, "luma", "task.created", input);
+         await gate.promise;
+         yield event(`task-${input}`, 2, "luma", "agent.done", "Done", { finalOutput: "Done" });
+       },
+     };
+
+     renderApp(<AppShell runAdapter={runAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Draft a focused project plan" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     await screen.findByRole("button", { name: "Stop run" });
+     expect(screen.getByLabelText("Task request")).toBeDisabled();
+     expect(screen.getByRole("button", { name: "Send to Queue" })).toBeDisabled();
+
+     gate.resolve();
+     await screen.findByText("Done");
+   });
+
+   it("runs the mock flow through compact cards and opens final/log details", async () => {
+     renderApp(<AppShell runAdapter={mockRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), {
+       target: { value: "Review this code and verify risky edge cases" },
+     });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     await screen.findAllByText("Here is the focused plan synthesized from Orion and Argus.");
+
+     expect(screen.getByText("scene-events-14")).toBeInTheDocument();
+     expect(screen.getByLabelText("Agents summary")).toHaveTextContent("Argus: done");
+     expect(screen.queryByRole("region", { name: "Routing decision" })).not.toBeInTheDocument();
+     expect(screen.getByRole("region", { name: "Live run inspector" })).toHaveTextContent(
+       "Research brief: focus the plan around the highest-risk milestone first.",
+     );
+     expect(screen.getByRole("button", { name: "View Orion details" })).toBeInTheDocument();
+     fireEvent.click(screen.getByRole("button", { name: "View Orion details" }));
+     expect(screen.getByRole("dialog", { name: "Run details" })).toHaveTextContent("Orion Details");
+     expect(screen.getByRole("dialog", { name: "Run details" })).toHaveTextContent("T1");
+     expect(screen.getByRole("dialog", { name: "Run details" })).toHaveTextContent(
+       "Research brief: focus the plan around the highest-risk milestone first.",
+     );
+     fireEvent.click(screen.getByRole("button", { name: "Close" }));
+
+     expect(screen.queryByRole("button", { name: "Open full final output" })).not.toBeInTheDocument();
+     expect(screen.getByRole("region", { name: "Work queue" })).toHaveTextContent("T1");
+     fireEvent.click(
+       screen.getByRole("button", {
+         name: "Open final output for T1 Review this code and verify risky edge cases",
+       }),
+     );
+     expect(screen.queryByRole("tab", { name: "Final output" })).not.toBeInTheDocument();
+     expect(screen.getByRole("tab", { name: "Agent reports" })).toHaveAttribute("aria-selected", "true");
+     expect(screen.getByRole("dialog", { name: "Run details" })).toHaveTextContent("Luma Details");
+     expect(screen.getByRole("dialog", { name: "Run details" })).toHaveTextContent(
+       "Here is the focused plan synthesized from Orion and Argus.",
+     );
+     expect(screen.getByRole("dialog", { name: "Run details" })).toHaveTextContent("T1");
+     fireEvent.click(screen.getByRole("button", { name: "Close" }));
+
+     fireEvent.click(screen.getByRole("button", { name: "Open run log" }));
+     fireEvent.click(screen.getByRole("tab", { name: "Routing" }));
+     expect(screen.getByRole("dialog", { name: "Run details" })).toHaveTextContent("Selected agents: Orion, Argus");
+     fireEvent.click(screen.getByRole("button", { name: "Close" }));
+
+     fireEvent.click(screen.getByRole("button", { name: "Open run log" }));
+     expect(screen.getByRole("dialog", { name: "Run details" })).toHaveTextContent(
+       "Luma -> Orion: Orion, identify research context, assumptions, uncertainty, and source-checking needs.",
+     );
+   });
+
+   it("stores successful run context and forwards it to the next run", async () => {
+     const seenPreviousRuns: unknown[] = [];
+     const contextRunAdapter: RunAdapter = {
+       async *startRun(input, options) {
+         seenPreviousRuns.push(options?.previousRun);
+         yield {
+           agentId: "luma",
+           eventId: `${input}-1`,
+           message: input,
+           taskId: `task-${input}`,
+           timestamp: "2026-05-26T00:00:00.000Z",
+           type: "task.created",
+         };
+         yield {
+           agentId: "orion",
+           eventId: `${input}-2`,
+           message: "Orion returns research findings",
+           payload: { report: "Research complete" },
+           taskId: `task-${input}`,
+           timestamp: "2026-05-26T00:00:01.000Z",
+           type: "agent.reporting",
+         };
+         yield {
+           agentId: "argus",
+           eventId: `${input}-3`,
+           message: "Argus returns review notes",
+           payload: { report: "Review complete" },
+           taskId: `task-${input}`,
+           timestamp: "2026-05-26T00:00:02.000Z",
+           type: "agent.reporting",
+         };
+         yield {
+           agentId: "luma",
+           eventId: `${input}-4`,
+           message: "Luma places the final summary on the central desk",
+           payload: { finalOutput: `Final for ${input}` },
+           taskId: `task-${input}`,
+           timestamp: "2026-05-26T00:00:03.000Z",
+           type: "agent.done",
+         };
+       },
+     };
+
+     renderApp(<AppShell runAdapter={contextRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "First prompt" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+     await screen.findAllByText("Final for First prompt");
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Who worked on that?" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     await waitFor(() => {
+       expect(seenPreviousRuns[1]).toMatchObject({
+         delegatedAgents: ["Orion", "Argus"],
+         finalOutput: "Final for First prompt",
+         prompt: "First prompt",
+         taskId: "task-First prompt",
+       });
+     });
+   });
+
+   it("forwards the selected workspace path to the run adapter", async () => {
+     const seenWorkspaces: unknown[] = [];
+     const workspaceRunAdapter: RunAdapter = {
+       async *startRun(input, options) {
+         seenWorkspaces.push(options?.workspacePath);
+         yield event(`task-${input}`, 1, "luma", "task.created", input);
+         yield event(`task-${input}`, 2, "luma", "agent.done", "Done", { finalOutput: "Done" });
+       },
+     };
+
+     renderApp(<AppShell runAdapter={workspaceRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Target workspace"), {
+       target: { value: "/home/eunhwapark/IdeaProjects/drive" },
+     });
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Inspect this repo" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     await screen.findByText("Done");
+     expect(seenWorkspaces).toEqual(["/home/eunhwapark/IdeaProjects/drive"]);
+   });
+
+   it("selects discovered workspaces from the launcher without typing the full path", async () => {
+     const seenWorkspaces: unknown[] = [];
+     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+       new Response(
+         JSON.stringify({
+           currentWorkspace: "/home/eunhwapark/IdeaProjects/lanternwood-athenaeum",
+           roots: ["/home/eunhwapark/IdeaProjects"],
+           workspaces: [
+             { name: "drive", path: "/home/eunhwapark/IdeaProjects/drive", root: "/home/eunhwapark/IdeaProjects" },
+             {
+               name: "lanternwood-athenaeum",
+               path: "/home/eunhwapark/IdeaProjects/lanternwood-athenaeum",
+               root: "/home/eunhwapark/IdeaProjects",
+             },
+           ],
+         }),
+         { status: 200 },
+       ),
+     );
+     const workspaceRunAdapter: RunAdapter = {
+       async *startRun(input, options) {
+         seenWorkspaces.push(options?.workspacePath);
+         yield event(`task-${input}`, 1, "luma", "task.created", input);
+         yield event(`task-${input}`, 2, "luma", "agent.done", "Done", { finalOutput: "Done" });
+       },
+     };
+     vi.stubGlobal("fetch", fetchMock);
+
+     renderApp(<AppShell runAdapter={workspaceRunAdapter} />);
+
+     fireEvent.click(await screen.findByRole("button", { name: "Select workspace drive" }));
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Inspect this repo" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     await screen.findByText("Done");
+     expect(screen.getAllByText("/home/eunhwapark/IdeaProjects/drive").length).toBeGreaterThan(0);
+     expect(seenWorkspaces).toEqual(["/home/eunhwapark/IdeaProjects/drive"]);
+     expect(JSON.parse(window.localStorage.getItem("lanternwood.recentWorkspaces") ?? "[]")).toEqual([
+       { name: "drive", path: "/home/eunhwapark/IdeaProjects/drive" },
+     ]);
+   });
+
+   it("posts generated agent definitions from a single description", async () => {
+     const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+       const url = String(input);
+
+       return Promise.resolve(
+         new Response(JSON.stringify(url.endsWith("/api/agents") ? { id: "react-ui-implementation" } : { workspaces: [] }), {
+           headers: { "Content-Type": "application/json" },
+           status: url.endsWith("/api/agents") ? 201 : 200,
+         }),
+       );
+     });
+     vi.stubGlobal("fetch", fetchMock);
+
+     renderApp(<AppShell runAdapter={mockRunAdapter} />);
+
+     fireEvent.click(screen.getByText("Agent Library"));
+     fireEvent.change(screen.getByLabelText("Agent description"), {
+       target: { value: "React UI implementation and e2e repair specialist" },
+     });
+     await screen.findByText("react-ui-implementation");
+     fireEvent.click(screen.getByRole("button", { name: "Create agent" }));
+
+     await screen.findByText("Agent react-ui-implementation created. Reload to activate.");
+     expect(fetchMock).toHaveBeenCalledWith(
+       "/api/agents",
+       expect.objectContaining({
+         body: JSON.stringify({
+           color: "#7aa2f7",
+           displayName: "React UI Implementation",
+           id: "react-ui-implementation",
+           persona:
+             "Specialist focused on React UI implementation and e2e repair specialist. Keep notes concrete, scoped, and ready for Luma to synthesize.",
+           promptInstruction:
+             "Handle tasks related to React UI implementation and e2e repair specialist. Return concise specialist notes only.",
+           routingKeywords: ["react", "ui", "implementation", "e2e", "repair", "specialist"],
+           routingReason: "React UI implementation and e2e repair specialist work",
+           worldRole: "React UI Implementation specialist",
+         }),
+         method: "POST",
+       }),
+     );
+   });
+
+   it("uses Codex to draft an agent but still requires create approval before files are written", async () => {
+     const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+       const url = String(input);
+       const body = url.endsWith("/api/agents/draft")
+         ? {
+             draft: {
+               color: "#9ece6a",
+               displayName: "React E2E Steward",
+               id: "react-e2e-steward",
+               persona: "Keeps React implementation and e2e repair work concrete.",
+               promptInstruction: "Implement React UI and e2e repair tasks with concise evidence.",
+               routingKeywords: ["react", "e2e", "ui"],
+               routingReason: "React UI and e2e repair work",
+               worldRole: "Interface steward",
+             },
+           }
+         : url.endsWith("/api/agents")
+           ? { id: "react-e2e-steward" }
+           : { workspaces: [] };
+
+       return Promise.resolve(
+         new Response(JSON.stringify(body), {
+           headers: { "Content-Type": "application/json" },
+           status: url.endsWith("/api/agents") ? 201 : 200,
+         }),
+       );
+     });
+     vi.stubGlobal("fetch", fetchMock);
+
+     renderApp(<AppShell runAdapter={mockRunAdapter} />);
+
+     fireEvent.click(screen.getByText("Agent Library"));
+     fireEvent.change(screen.getByLabelText("Agent description"), {
+       target: { value: "React UI implementation and e2e repair specialist" },
+     });
+     fireEvent.click(screen.getByRole("button", { name: "Generate with Codex" }));
+
+     await screen.findByText("React E2E Steward");
+     expect(fetchMock).toHaveBeenCalledWith(
+       "/api/agents/draft",
+       expect.objectContaining({
+         body: JSON.stringify({ description: "React UI implementation and e2e repair specialist" }),
+         method: "POST",
+       }),
+     );
+     expect(fetchMock).not.toHaveBeenCalledWith("/api/agents", expect.anything());
+
+     fireEvent.click(screen.getByRole("button", { name: "Create agent" }));
+
+     await screen.findByText("Agent react-e2e-steward created. Reload to activate.");
+     expect(fetchMock).toHaveBeenCalledWith(
+       "/api/agents",
+       expect.objectContaining({
+         body: JSON.stringify({
+           color: "#9ece6a",
+           displayName: "React E2E Steward",
+           id: "react-e2e-steward",
+           persona: "Keeps React implementation and e2e repair work concrete.",
+           promptInstruction: "Implement React UI and e2e repair tasks with concise evidence.",
+           routingKeywords: ["react", "e2e", "ui"],
+           routingReason: "React UI and e2e repair work",
+           worldRole: "Interface steward",
+         }),
+         method: "POST",
+       }),
+     );
+   });
+
+   it("increments the scene run epoch even when the same prompt is submitted again", async () => {
+     renderApp(<AppShell runAdapter={mockRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "What is Luma?" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+     await screen.findAllByText("This request is simple enough for Luma to answer directly without specialist routing.");
+     expect(screen.getByText("scene-run-1")).toBeInTheDocument();
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "What is Luma?" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     await waitFor(() => expect(screen.getByText("scene-run-2")).toBeInTheDocument());
+   });
+
+   it("marks active specialists failed when a stream throws while preserving reported output", async () => {
+     const reportingThenFailingRunAdapter: RunAdapter = {
+       async *startRun() {
+         yield {
+           agentId: "luma",
+           eventId: "task-1-client-1",
+           message: "Draft a focused project plan",
+           taskId: "task-1",
+           timestamp: "2026-05-26T00:00:00.000Z",
+           type: "task.created",
+         };
+         yield {
+           agentId: "orion",
+           eventId: "task-1-client-2",
+           message: "Orion returns research findings",
+           payload: { report: "Research complete" },
+           taskId: "task-1",
+           timestamp: "2026-05-26T00:00:01.000Z",
+           type: "agent.reporting",
+         };
+         yield {
+           agentId: "neria",
+           eventId: "task-1-client-3",
+           message: "Neria is working",
+           taskId: "task-1",
+           timestamp: "2026-05-26T00:00:02.000Z",
+           type: "agent.working",
+         };
+         throw new Error("Stream interrupted");
+       },
+     };
+
+     renderApp(<AppShell runAdapter={reportingThenFailingRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Draft a focused project plan" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     await waitFor(() => {
+       expect(screen.getAllByText("Stream interrupted").length).toBeGreaterThan(0);
+     });
+     expect(screen.getByText("Research complete")).toBeInTheDocument();
+     expect(screen.queryByText("Orion's route closed after the stream failed")).not.toBeInTheDocument();
+     expect(screen.getAllByText("Route closed after the stream failed").length).toBeGreaterThan(0);
+   });
+
+   it("marks unfinished specialists failed when the backend sends terminal Luma failure", async () => {
+     const terminalFailureRunAdapter: RunAdapter = {
+       async *startRun() {
+         yield {
+           agentId: "luma",
+           eventId: "task-1-client-1",
+           message: "Draft a focused project plan",
+           taskId: "task-1",
+           timestamp: "2026-05-26T00:00:00.000Z",
+           type: "task.created",
+         };
+         yield {
+           agentId: "orion",
+           eventId: "task-1-client-2",
+           message: "Orion returns research findings",
+           payload: { report: "Research complete" },
+           taskId: "task-1",
+           timestamp: "2026-05-26T00:00:01.000Z",
+           type: "agent.reporting",
+         };
+         yield {
+           agentId: "neria",
+           eventId: "task-1-client-3",
+           message: "Neria is working",
+           taskId: "task-1",
+           timestamp: "2026-05-26T00:00:02.000Z",
+           type: "agent.working",
+         };
+         yield {
+           agentId: "luma",
+           eventId: "task-1-client-4",
+           message: "Codex workflow stream failed",
+           taskId: "task-1",
+           timestamp: "2026-05-26T00:00:03.000Z",
+           type: "agent.failed",
+         };
+       },
+     };
+
+     renderApp(<AppShell runAdapter={terminalFailureRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Draft a focused project plan" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     await waitFor(() => {
+       expect(screen.getAllByText("Route closed after Luma reported a run failure").length).toBeGreaterThan(0);
+     });
+     expect(screen.getByText("Research complete")).toBeInTheDocument();
+   });
+
+   it("lets the user stop an in-flight run through the adapter abort signal", async () => {
+     let seenSignal: AbortSignal | undefined;
+     const stoppingRunAdapter: RunAdapter = {
+       async *startRun(_input, options) {
+         seenSignal = options?.signal;
+         yield {
+           agentId: "luma",
+           eventId: "task-stop-1",
+           message: "Draft a focused project plan",
+           taskId: "task-stop",
+           timestamp: "2026-05-26T00:00:00.000Z",
+           type: "task.created",
+         };
+         yield {
+           agentId: "orion",
+           eventId: "task-stop-2",
+           message: "Orion is working",
+           taskId: "task-stop",
+           timestamp: "2026-05-26T00:00:01.000Z",
+           type: "agent.working",
+         };
+         await new Promise<void>((resolve) => options?.signal?.addEventListener("abort", () => resolve(), { once: true }));
+         throw new Error("Run aborted");
+       },
+     };
+
+     renderApp(<AppShell runAdapter={stoppingRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Draft a focused project plan" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     await screen.findByText("Orion is working");
+     fireEvent.click(screen.getByRole("button", { name: "Stop run" }));
+
+     await waitFor(() => {
+       expect(seenSignal?.aborted).toBe(true);
+       expect(screen.getAllByText("Run aborted").length).toBeGreaterThan(0);
+     });
+   });
+
+   it("keeps raw Codex responses out of the user-facing drawer", async () => {
+     const diagnosticRunAdapter: RunAdapter = {
+       async *startRun() {
+         yield {
+           agentId: "luma",
+           eventId: "task-1-client-1",
+           message: "Draft a focused project plan",
+           taskId: "task-1",
+           timestamp: "2026-05-26T00:00:00.000Z",
+           type: "task.created",
+         };
+         yield {
+           agentId: "orion",
+           eventId: "task-1-client-2",
+           message: "Orion returns research findings",
+           payload: {
+             rawResponse: "Raw /Users/eunhwa/private/output",
+             report: "Research output from Orion",
+           },
+           taskId: "task-1",
+           timestamp: "2026-05-26T00:00:01.000Z",
+           type: "agent.reporting",
+         };
+       },
+     };
+
+     renderApp(<AppShell runAdapter={diagnosticRunAdapter} runMode="codex" />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Draft a focused project plan" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     await screen.findByText("Research output from Orion");
+     expect(screen.queryByRole("button", { name: "Open raw Codex details" })).not.toBeInTheDocument();
+
+     fireEvent.click(screen.getByRole("button", { name: "View Orion details" }));
+     const drawer = screen.getByRole("dialog", { name: "Run details" });
+     expect(drawer).toHaveTextContent("Research output from Orion");
+     expect(drawer).not.toHaveTextContent("[redacted-path]");
+     expect(drawer).not.toHaveTextContent("/Users/eunhwa/private");
+   });
+
+   it("queues new tasks while agents work and opens task-specific final outputs", async () => {
+     const gates = new Map<string, ReturnType<typeof deferred>>();
+     const startedJobs: string[] = [];
+     const queueRunAdapter = {
+       startRun() {
+         throw new Error("legacy single-run adapter should not be used in queue mode");
+       },
+       async *startAgentJob(job: { agentId: AgentId; taskId: string }) {
+         const gate = deferred();
+         gates.set(`${job.agentId}:${job.taskId}`, gate);
+         startedJobs.push(`${job.agentId}:${job.taskId}`);
+         yield event(job.taskId, 1, job.agentId, job.agentId === "argus" ? "agent.reviewing" : "agent.working", `${job.agentId} starts ${job.taskId}`);
+         await gate.promise;
+         yield event(job.taskId, 2, job.agentId, "agent.reporting", `${job.agentId} reports ${job.taskId}`, {
+           report: `${job.agentId} report for ${job.taskId}`,
+         });
+       },
+       async *synthesizeTask(task: { prompt: string; reports: Partial<Record<AgentId, string>>; taskId: string }) {
+         yield event(task.taskId, 3, "luma", "agent.working", `Luma synthesizes ${task.taskId}`);
+         yield event(task.taskId, 4, "luma", "agent.done", `Luma completes ${task.taskId}`, {
+           finalOutput: `Final for ${task.prompt}: ${Object.values(task.reports).join(" | ")}`,
+         });
+       },
+     } as RunAdapter;
+
+     renderApp(<AppShell runAdapter={queueRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Research current sources" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Rewrite this paragraph" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     await waitFor(() => {
+       expect(startedJobs.some((job) => job.startsWith("orion:"))).toBe(true);
+       expect(startedJobs.some((job) => job.startsWith("quill:"))).toBe(true);
+     });
+     expect(screen.getByRole("button", { name: "Send to Queue" })).toBeEnabled();
+     expect(screen.getByRole("region", { name: "Work queue" })).toHaveTextContent("Research current sources");
+     expect(screen.getByRole("region", { name: "Work queue" })).toHaveTextContent("Rewrite this paragraph");
+     expect(screen.getByRole("region", { name: "Active tasks" })).toHaveTextContent("T1");
+     expect(screen.getByRole("region", { name: "Active tasks" })).toHaveTextContent("T2");
+
+     for (const gate of gates.values()) {
+       gate.resolve();
+     }
+     await screen.findAllByText(/Final for Research current sources/);
+     await screen.findAllByText(/Final for Rewrite this paragraph/);
+     expect(screen.getByRole("region", { name: "Completed tasks" })).toHaveTextContent("T1");
+     expect(screen.getByRole("region", { name: "Completed tasks" })).toHaveTextContent("T2");
+
+     fireEvent.click(screen.getByRole("button", { name: "Open final output for T2 Rewrite this paragraph" }));
+     const drawer = screen.getByRole("dialog", { name: "Run details" });
+     expect(screen.queryByRole("tab", { name: "Final output" })).not.toBeInTheDocument();
+     expect(screen.getByRole("tab", { name: "Agent reports" })).toHaveAttribute("aria-selected", "true");
+     expect(drawer).toHaveTextContent("Luma Details");
+     expect(drawer).toHaveTextContent("Final for Rewrite this paragraph");
+     expect(drawer).toHaveTextContent("T2");
+     expect(drawer).not.toHaveTextContent("Final for Research current sources");
+     expect(drawer).not.toHaveTextContent("orion report");
+   });
+
+   it("keeps completed queue items to a recent preview with an explicit history expansion", async () => {
+     const queueRunAdapter = {
+       startRun() {
+         throw new Error("legacy single-run adapter should not be used in queue mode");
+       },
+       async *startAgentJob(job: { agentId: AgentId; taskId: string }) {
+         throw new Error("direct Luma tasks should not start specialist jobs");
+         yield event(job.taskId, 1, job.agentId, "agent.failed", "unreachable");
+       },
+       async *synthesizeTask(task: { prompt: string; taskId: string }) {
+         yield event(task.taskId, 1, "luma", "agent.done", `Luma completes ${task.prompt}`, {
+           finalOutput: `Final for ${task.prompt}`,
+         });
+       },
+     } as RunAdapter;
+
+     renderApp(<AppShell runAdapter={queueRunAdapter} />);
+
+     for (let index = 1; index <= 6; index += 1) {
+       fireEvent.change(screen.getByLabelText("Task request"), { target: { value: `What is Luma ${index}?` } });
+       fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+     }
+
+     await screen.findAllByText(/Final for What is Luma 6/);
+
+     const completedTasks = screen.getByRole("region", { name: "Completed tasks" });
+     expect(completedTasks).toHaveTextContent("T6");
+     expect(completedTasks).toHaveTextContent("T2");
+     expect(completedTasks).not.toHaveTextContent("T1");
+     expect(screen.getByRole("button", { name: "Show all completed tasks" })).toHaveTextContent("1 older");
+
+     fireEvent.click(screen.getByRole("button", { name: "Show all completed tasks" }));
+
+     expect(completedTasks).toHaveTextContent("T1");
+   });
+
+   it("keeps same-agent jobs queued until that agent finishes its active job", async () => {
+     const gates = new Map<string, ReturnType<typeof deferred>>();
+     const startedJobs: string[] = [];
+     const queueRunAdapter = {
+       startRun() {
+         throw new Error("legacy single-run adapter should not be used in queue mode");
+       },
+       async *startAgentJob(job: { agentId: AgentId; taskId: string }) {
+         const gate = deferred();
+         gates.set(`${job.agentId}:${job.taskId}`, gate);
+         startedJobs.push(`${job.agentId}:${job.taskId}`);
+         yield event(job.taskId, 1, job.agentId, "agent.working", `${job.agentId} starts ${job.taskId}`);
+         await gate.promise;
+         yield event(job.taskId, 2, job.agentId, "agent.reporting", `${job.agentId} reports ${job.taskId}`, {
+           report: `${job.agentId} report for ${job.taskId}`,
+         });
+       },
+       async *synthesizeTask(task: { prompt: string; reports: Partial<Record<AgentId, string>>; taskId: string }) {
+         yield event(task.taskId, 3, "luma", "agent.done", `Luma completes ${task.taskId}`, {
+           finalOutput: `Final for ${task.prompt}`,
+         });
+       },
+     } as RunAdapter;
+
+     renderApp(<AppShell runAdapter={queueRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Research first topic" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Research second topic" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     await waitFor(() => expect(startedJobs.filter((job) => job.startsWith("orion:"))).toHaveLength(1));
+     expect(screen.getByRole("region", { name: "Queued tasks" })).toHaveTextContent("T2");
+     expect(screen.getByRole("region", { name: "Queued tasks" })).toHaveTextContent("Research second topic");
+     expect(screen.getByRole("region", { name: "Active tasks" })).not.toHaveTextContent("T2");
+     const firstOrionJob = startedJobs.find((job) => job.startsWith("orion:"));
+     expect(firstOrionJob).toBeDefined();
+     gates.get(firstOrionJob!)?.resolve();
+
+     await waitFor(() => expect(startedJobs.filter((job) => job.startsWith("orion:"))).toHaveLength(2));
+   });
+
+   it("starts queued Argus review after primary specialist reports are available", async () => {
+     const startedJobs: string[] = [];
+     const argusReportContexts: unknown[] = [];
+     const queueRunAdapter = {
+       startRun() {
+         throw new Error("legacy single-run adapter should not be used in queue mode");
+       },
+       async *startAgentJob(job: { agentId: AgentId; specialistReports?: Partial<Record<AgentId, string>>; taskId: string }) {
+         startedJobs.push(`${job.agentId}:${job.taskId}`);
+
+         if (job.agentId === "argus") {
+           argusReportContexts.push(job.specialistReports);
+           yield event(job.taskId, 1, "argus", "agent.reviewing", "Argus reviews the task");
+           yield event(job.taskId, 2, "argus", "agent.reporting", "Argus reports", { report: "Argus review report" });
+           return;
+         }
+
+         yield event(job.taskId, 1, job.agentId, "agent.working", `${job.agentId} starts ${job.taskId}`);
+         yield event(job.taskId, 2, job.agentId, "agent.reporting", `${job.agentId} reports ${job.taskId}`, {
+           report: `${job.agentId} report`,
+         });
+       },
+       async *synthesizeTask(task: { prompt: string; taskId: string }) {
+         yield event(task.taskId, 3, "luma", "agent.done", `Luma completes ${task.taskId}`, {
+           finalOutput: `Final for ${task.prompt}`,
+         });
+       },
+     } as RunAdapter;
+
+     renderApp(<AppShell runAdapter={queueRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), {
+       target: { value: "Review this code and verify risky edge cases" },
+     });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     await waitFor(() => {
+       expect(startedJobs.some((job) => job.startsWith("orion:"))).toBe(true);
+       expect(startedJobs.some((job) => job.startsWith("argus:"))).toBe(true);
+       expect(argusReportContexts[0]).toMatchObject({ orion: "orion report" });
+       expect(startedJobs.findIndex((job) => job.startsWith("argus:"))).toBeGreaterThan(
+         startedJobs.findIndex((job) => job.startsWith("orion:")),
+       );
+     });
+   });
+
+   it("keeps a queued specialist failure from completing the job or starting synthesis", async () => {
+     const synthesizeTask = vi.fn(async function* () {
+       throw new Error("synthesis should not run after specialist failure");
+       yield event("unreachable", 1, "luma", "agent.failed", "unreachable");
+     });
+     const queueRunAdapter = {
+       startRun() {
+         throw new Error("legacy single-run adapter should not be used in queue mode");
+       },
+       async *startAgentJob(job: { agentId: AgentId; taskId: string }) {
+         yield event(job.taskId, 1, job.agentId, "agent.failed", `${job.agentId} route failed`);
+       },
+       synthesizeTask,
+     } as RunAdapter;
+
+     renderApp(<AppShell runAdapter={queueRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Research current sources" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     await waitFor(() => {
+       expect(screen.getByRole("region", { name: "Work queue" })).toHaveTextContent("failed");
+       expect(synthesizeTask).not.toHaveBeenCalled();
+     });
+     expect(screen.queryByText("Agent job complete")).not.toBeInTheDocument();
+   });
+
+   it("does not start remaining queued specialist jobs after the task has failed", async () => {
+     const releaseWarmup = deferred();
+     const startedJobs: string[] = [];
+     const queueRunAdapter = {
+       startRun() {
+         throw new Error("legacy single-run adapter should not be used in queue mode");
+       },
+       async *startAgentJob(job: { agentId: AgentId; prompt: string; taskId: string }) {
+         startedJobs.push(`${job.agentId}:${job.prompt}`);
+
+         if (job.prompt === "Rewrite warmup paragraph") {
+           yield event(job.taskId, 1, job.agentId, "agent.working", "Quill starts warmup");
+           await releaseWarmup.promise;
+           yield event(job.taskId, 2, job.agentId, "agent.reporting", "Quill reports warmup", {
+             report: "Warmup draft",
+           });
+           return;
+         }
+
+         if (job.agentId === "orion") {
+           yield event(job.taskId, 1, job.agentId, "agent.failed", "Orion route failed");
+           return;
+         }
+
+         yield event(job.taskId, 1, job.agentId, "agent.reporting", `${job.agentId} should not run`, {
+           report: "unexpected",
+         });
+       },
+       async *synthesizeTask(task: { prompt: string; taskId: string }) {
+         yield event(task.taskId, 3, "luma", "agent.done", `Luma completes ${task.taskId}`, {
+           finalOutput: `Final for ${task.prompt}`,
+         });
+       },
+     } as RunAdapter;
+
+     renderApp(<AppShell runAdapter={queueRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Rewrite warmup paragraph" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+     await waitFor(() => expect(startedJobs).toContain("quill:Rewrite warmup paragraph"));
+
+     fireEvent.change(screen.getByLabelText("Task request"), {
+       target: { value: "Research and draft this risky code review plan" },
+     });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     await waitFor(() => {
+       expect(startedJobs).toContain("orion:Research and draft this risky code review plan");
+       expect(screen.getByRole("region", { name: "Work queue" })).toHaveTextContent("Orion route failed");
+     });
+
+     releaseWarmup.resolve();
+     await screen.findAllByText(/Final for Rewrite warmup paragraph/);
+
+     expect(startedJobs).not.toContain("quill:Research and draft this risky code review plan");
+   });
+
+   it("keeps a queued synthesis failure from completing the Luma synthesis job", async () => {
+     const queueRunAdapter = {
+       startRun() {
+         throw new Error("legacy single-run adapter should not be used in queue mode");
+       },
+       async *startAgentJob(job: { agentId: AgentId; taskId: string }) {
+         yield event(job.taskId, 1, job.agentId, "agent.reporting", `${job.agentId} reports ${job.taskId}`, {
+           report: `${job.agentId} report`,
+         });
+       },
+       async *synthesizeTask(task: { taskId: string }) {
+         yield event(task.taskId, 2, "luma", "agent.failed", "Synthesis route failed");
+       },
+     } as RunAdapter;
+
+     renderApp(<AppShell runAdapter={queueRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Research current sources" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     await waitFor(() => {
+       expect(screen.getByRole("region", { name: "Work queue" })).toHaveTextContent("failed");
+       expect(screen.getByRole("region", { name: "Live run inspector" })).toHaveTextContent("Synthesis route failed");
+     });
+     expect(screen.getByRole("region", { name: "Live run inspector" })).not.toHaveTextContent("Synthesis complete");
+   });
+
+   it("stops queued work without starting the next same-agent job", async () => {
+     const startedJobs: string[] = [];
+     const queueRunAdapter = {
+       startRun() {
+         throw new Error("legacy single-run adapter should not be used in queue mode");
+       },
+       async *startAgentJob(job: { agentId: AgentId; taskId: string }, options?: { signal?: AbortSignal }) {
+         startedJobs.push(`${job.agentId}:${job.taskId}`);
+         yield event(job.taskId, 1, job.agentId, "agent.working", `${job.agentId} starts ${job.taskId}`);
+         await new Promise<void>((resolve) => options?.signal?.addEventListener("abort", () => resolve(), { once: true }));
+         throw new Error("Run aborted");
+       },
+       async *synthesizeTask(task: { prompt: string; taskId: string }) {
+         yield event(task.taskId, 3, "luma", "agent.done", `Luma completes ${task.taskId}`, {
+           finalOutput: `Final for ${task.prompt}`,
+         });
+       },
+     } as RunAdapter;
+
+     renderApp(<AppShell runAdapter={queueRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Research first topic" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Research second topic" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     await waitFor(() => expect(startedJobs.filter((job) => job.startsWith("orion:"))).toHaveLength(1));
+     fireEvent.click(screen.getByRole("button", { name: "Stop run" }));
+
+     await waitFor(() => {
+       expect(screen.getByRole("region", { name: "Work queue" })).toHaveTextContent("failed");
+       expect(startedJobs.filter((job) => job.startsWith("orion:"))).toHaveLength(1);
+       expect(screen.getByLabelText("Agents summary")).toHaveTextContent("Luma: failed");
+     });
+   });
+
+   it("opens failed task details when partial specialist reports exist", async () => {
+     const queueRunAdapter = {
+       startRun() {
+         throw new Error("legacy single-run adapter should not be used in queue mode");
+       },
+       async *startAgentJob(job: { agentId: AgentId; taskId: string }) {
+         yield event(job.taskId, 1, job.agentId, "agent.working", `${job.agentId} starts ${job.taskId}`);
+         yield event(job.taskId, 2, job.agentId, "agent.reporting", `${job.agentId} reports ${job.taskId}`, {
+           report: `${job.agentId} partial report`,
+         });
+         yield event(job.taskId, 3, job.agentId, "agent.failed", `${job.agentId} route failed`);
+       },
+       async *synthesizeTask(task: { taskId: string }) {
+         throw new Error(`synthesis should not run for ${task.taskId}`);
+         yield event(task.taskId, 1, "luma", "agent.failed", "unreachable");
+       },
+     } as RunAdapter;
+
+     renderApp(<AppShell runAdapter={queueRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Research current sources" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     await waitFor(() => expect(screen.getByRole("region", { name: "Work queue" })).toHaveTextContent("failed"));
+     const detailsButton = screen.getByRole("button", { name: /Open details for T1 Research current sources/ });
+
+     expect(detailsButton).toBeEnabled();
+     fireEvent.click(detailsButton);
+
+     const drawer = screen.getByRole("dialog", { name: "Run details" });
+     expect(drawer).toHaveTextContent("orion partial report");
+     expect(screen.getByRole("region", { name: "Work queue" })).toHaveTextContent("orion route failed");
+   });
+
+   it("opens the run log for failed task details when no reports exist", async () => {
+     const queueRunAdapter = {
+       startRun() {
+         throw new Error("legacy single-run adapter should not be used in queue mode");
+       },
+       async *startAgentJob(job: { agentId: AgentId; taskId: string }) {
+         yield event(job.taskId, 1, job.agentId, "agent.failed", `${job.agentId} failed before reporting`);
+       },
+       async *synthesizeTask(task: { taskId: string }) {
+         throw new Error(`synthesis should not run for ${task.taskId}`);
+         yield event(task.taskId, 1, "luma", "agent.failed", "unreachable");
+       },
+     } as RunAdapter;
+
+     renderApp(<AppShell runAdapter={queueRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Research current sources" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     await waitFor(() => expect(screen.getByRole("region", { name: "Work queue" })).toHaveTextContent("failed before reporting"));
+     fireEvent.click(screen.getByRole("button", { name: /Open details for T1 Research current sources/ }));
+
+     const drawer = screen.getByRole("dialog", { name: "Run details" });
+
+     expect(screen.getByRole("tab", { name: "Run log" })).toHaveAttribute("aria-selected", "true");
+     expect(drawer).toHaveTextContent("failed before reporting");
+   });
+
+   it("uses the previous-run snapshot from queue time for delayed queued work", async () => {
+     const gates = new Map<string, ReturnType<typeof deferred>>();
+     const seenPreviousRuns: unknown[] = [];
+     const queueRunAdapter = {
+       startRun() {
+         throw new Error("legacy single-run adapter should not be used in queue mode");
+       },
+       async *startAgentJob(job: { agentId: AgentId; prompt: string; taskId: string }, options?: { previousRun?: unknown }) {
+         seenPreviousRuns.push(options?.previousRun);
+         const gate = deferred();
+         gates.set(`${job.agentId}:${job.prompt}`, gate);
+         yield event(job.taskId, 1, job.agentId, "agent.working", `${job.agentId} starts ${job.prompt}`);
+         await gate.promise;
+         yield event(job.taskId, 2, job.agentId, "agent.reporting", `${job.agentId} reports ${job.prompt}`, {
+           report: `${job.agentId} report for ${job.prompt}`,
+         });
+       },
+       async *synthesizeTask(task: { prompt: string; reports: Partial<Record<AgentId, string>>; taskId: string }, options?: { previousRun?: unknown }) {
+         seenPreviousRuns.push(options?.previousRun);
+         yield event(task.taskId, 3, "luma", "agent.done", `Luma completes ${task.prompt}`, {
+           finalOutput: `Final for ${task.prompt}: ${Object.values(task.reports).join(" | ")}`,
+         });
+       },
+     } as RunAdapter;
+
+     renderApp(<AppShell runAdapter={queueRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "What is Luma baseline?" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+     await screen.findAllByText(/Final for What is Luma baseline/);
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Research first topic" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Research second topic" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     await waitFor(() => expect(gates.has("orion:Research first topic")).toBe(true));
+     gates.get("orion:Research first topic")?.resolve();
+     await screen.findAllByText(/Final for Research first topic/);
+     await waitFor(() => expect(gates.has("orion:Research second topic")).toBe(true));
+
+     expect(seenPreviousRuns.at(-1)).toMatchObject({
+       finalOutput: expect.stringContaining("Final for What is Luma baseline"),
+       prompt: "What is Luma baseline?",
+     });
+     expect(seenPreviousRuns.at(-1)).not.toMatchObject({
+       prompt: "Research first topic",
+     });
+   });
+
+   it("orders completed queue items by completion time instead of creation time", async () => {
+     const gates = new Map<string, ReturnType<typeof deferred>>();
+     let completionIndex = 0;
+     const queueRunAdapter = {
+       startRun() {
+         throw new Error("legacy single-run adapter should not be used in queue mode");
+       },
+       async *startAgentJob(job: { agentId: AgentId; taskId: string }) {
+         const gate = deferred();
+         gates.set(`${job.agentId}:${job.taskId}`, gate);
+         yield event(job.taskId, 1, job.agentId, "agent.working", `${job.agentId} starts ${job.taskId}`);
+         await gate.promise;
+         yield event(job.taskId, 2, job.agentId, "agent.reporting", `${job.agentId} reports ${job.taskId}`, {
+           report: `${job.agentId} report`,
+         });
+       },
+       async *synthesizeTask(task: { prompt: string; taskId: string }) {
+         completionIndex += 1;
+         yield {
+           ...event(task.taskId, 3, "luma", "agent.done", `Luma completes ${task.taskId}`, {
+             finalOutput: `Final for ${task.prompt}`,
+           }),
+           timestamp: `2026-05-28T00:00:0${completionIndex}.000Z`,
+         };
+       },
+     } as RunAdapter;
+
+     renderApp(<AppShell runAdapter={queueRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Research first topic" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Rewrite this paragraph" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     await waitFor(() => {
+       expect(Array.from(gates.keys()).some((key) => key.startsWith("orion:"))).toBe(true);
+       expect(Array.from(gates.keys()).some((key) => key.startsWith("quill:"))).toBe(true);
+     });
+     gates.get(Array.from(gates.keys()).find((key) => key.startsWith("quill:"))!)?.resolve();
+     await screen.findAllByText(/Final for Rewrite this paragraph/);
+     gates.get(Array.from(gates.keys()).find((key) => key.startsWith("orion:"))!)?.resolve();
+     await screen.findAllByText(/Final for Research first topic/);
+
+     const completedItems = within(screen.getByRole("region", { name: "Completed tasks" })).getAllByRole("listitem");
+
+     expect(completedItems[0]).toHaveTextContent("Research first topic");
+     expect(completedItems[1]).toHaveTextContent("Rewrite this paragraph");
+   });
+
+   it("does not let an aborted worker remove a newly submitted same-agent job", async () => {
+     const releaseAbortedWorker = deferred();
+     const startedJobs: string[] = [];
+     const queueRunAdapter = {
+       startRun() {
+         throw new Error("legacy single-run adapter should not be used in queue mode");
+       },
+       async *startAgentJob(job: { agentId: AgentId; taskId: string }, options?: { signal?: AbortSignal }) {
+         startedJobs.push(`${job.agentId}:${job.taskId}`);
+         yield event(job.taskId, 1, job.agentId, "agent.working", `${job.agentId} starts ${job.taskId}`);
+         await new Promise<void>((resolve) => options?.signal?.addEventListener("abort", () => resolve(), { once: true }));
+         await releaseAbortedWorker.promise;
+         throw new Error("Run aborted");
+       },
+       async *synthesizeTask(task: { prompt: string; taskId: string }) {
+         yield event(task.taskId, 3, "luma", "agent.done", `Luma completes ${task.taskId}`, {
+           finalOutput: `Final for ${task.prompt}`,
+         });
+       },
+     } as RunAdapter;
+
+     renderApp(<AppShell runAdapter={queueRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Research first topic" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     await waitFor(() => expect(startedJobs.filter((job) => job.startsWith("orion:"))).toHaveLength(1));
+     fireEvent.click(screen.getByRole("button", { name: "Stop run" }));
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Research second topic" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     releaseAbortedWorker.resolve();
+
+     await waitFor(() => expect(startedJobs.filter((job) => job.startsWith("orion:"))).toHaveLength(2));
+   });
+
+   it("summarizes the current task's active agent work in the dashboard header", async () => {
+     const gates = new Map<string, ReturnType<typeof deferred>>();
+     const currentTaskRunAdapter = {
+       startRun() {
+         throw new Error("legacy single-run adapter should not be used in queue mode");
+       },
+       async *startAgentJob(job: { agentId: AgentId; taskId: string }) {
+         const gate = deferred();
+         gates.set(`${job.agentId}:${job.taskId}`, gate);
+         yield event(
+           job.taskId,
+           1,
+           job.agentId,
+           job.agentId === "argus" ? "agent.reviewing" : "agent.working",
+           `${job.agentId} starts ${job.taskId}`,
+         );
+         await gate.promise;
+         yield event(job.taskId, 2, job.agentId, "agent.reporting", `${job.agentId} reports ${job.taskId}`, {
+           report: `${job.agentId} report for ${job.taskId}`,
+         });
+       },
+       async *synthesizeTask(task: { prompt: string; taskId: string }) {
+         yield event(task.taskId, 3, "luma", "agent.done", `Luma completes ${task.taskId}`, {
+           finalOutput: `Final for ${task.prompt}`,
+         });
+       },
+     } as RunAdapter;
+
+     renderApp(<AppShell runAdapter={currentTaskRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), {
+       target: { value: "Review this code and verify risky edge cases" },
+     });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     const currentTask = screen.getByRole("region", { name: "Current task" });
+
+     await waitFor(() => {
+       expect(currentTask).toHaveTextContent("T1");
+       expect(currentTask).toHaveTextContent("Review this code and verify risky edge cases");
+       expect(currentTask).toHaveTextContent("Orion");
+       expect(currentTask).toHaveTextContent("working");
+       expect(currentTask).not.toHaveTextContent("Argus");
+     });
+
+     gates.get(Array.from(gates.keys()).find((key) => key.startsWith("orion:"))!)?.resolve();
+
+     await waitFor(() => {
+       expect(currentTask).toHaveTextContent("Argus");
+       expect(currentTask).toHaveTextContent("reviewing");
+     });
+
+     fireEvent.click(within(currentTask).getByRole("button", { name: "View current task activity" }));
+     const drawer = screen.getByRole("dialog", { name: "Run details" });
+
+     expect(screen.getByRole("tab", { name: "Workload" })).toHaveAttribute("aria-selected", "true");
+     expect(within(drawer).getByRole("region", { name: "Current task workload" })).toHaveTextContent("T1");
+     expect(drawer).toHaveTextContent("Orion");
+     expect(drawer).toHaveTextContent("Argus");
+     fireEvent.click(screen.getByRole("button", { name: "Close" }));
+
+     for (const gate of gates.values()) {
+       gate.resolve();
+     }
+
+     await screen.findAllByText(/Final for Review this code and verify risky edge cases/);
+   });
+
+   it("forwards workspace-write mode only after UI approval is enabled", async () => {
+     const seenSandboxModes: unknown[] = [];
+     const workspaceRunAdapter: RunAdapter = {
+       async *startRun(input, options) {
+         seenSandboxModes.push(options?.sandboxMode);
+         yield event(`task-${input}`, 1, "luma", "task.created", input);
+         yield event(`task-${input}`, 2, "luma", "agent.done", "Done", { finalOutput: "Done" });
+       },
+     };
+
+     renderApp(<AppShell runAdapter={workspaceRunAdapter} />);
+
+     fireEvent.click(screen.getByLabelText("Allow workspace writes"));
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Write a file" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     await screen.findByText("Done");
+     expect(seenSandboxModes).toEqual(["workspace-write"]);
+   });
+
+   it("loads workspace metadata and skill hints into the dashboard", async () => {
+     const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+       const url = String(input);
+       const body = url.endsWith("/api/workspaces")
+         ? {
+             currentWorkspace: "/home/eunhwapark/IdeaProjects/lanternwood-athenaeum",
+             roots: ["/home/eunhwapark/IdeaProjects"],
+             workspaces: [],
+           }
+         : {
+           metadata: {
+             agentContextFiles: ["AGENTS.md", ".agents/lanternwood/agents/build-scribe/agent.json"],
+             changedFiles: ["src/App.tsx"],
+             diffExcerpt: "diff --git a/src/App.tsx b/src/App.tsx",
+             gitStatus: " M src/App.tsx",
+             packageScripts: [{ command: "vitest run", name: "test" }],
+             verification: { command: "npm test", exitCode: 0, output: "Tests passed" },
+             workspacePath: "/home/eunhwapark/IdeaProjects/demo",
+           },
+           skills: [
+             {
+               description: "Use for build tasks",
+               name: "build-helper",
+               path: "/home/eunhwapark/.codex/skills/build-helper/SKILL.md",
+             },
+           ],
+         };
+
+       return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+     });
+     vi.stubGlobal("fetch", fetchMock);
+
+     renderApp(<AppShell runAdapter={mockRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Target workspace"), {
+       target: { value: "/home/eunhwapark/IdeaProjects/demo" },
+     });
+     fireEvent.click(screen.getByRole("button", { name: "Inspect workspace" }));
+
+     await screen.findByText("AGENTS.md");
+     expect(screen.getByRole("region", { name: "Workspace context" })).toHaveTextContent(
+       ".agents/lanternwood/agents/build-scribe/agent.json",
+     );
+     expect(screen.getByRole("region", { name: "Run results" })).toHaveTextContent("src/App.tsx");
+     expect(screen.getByRole("region", { name: "Skill discovery" })).toHaveTextContent("build-helper");
+   });
+
+ });

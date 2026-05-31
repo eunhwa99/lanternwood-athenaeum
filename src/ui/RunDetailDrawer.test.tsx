@@ -286,4 +286,55 @@ describe("RunDetailDrawer", () => {
     expect(taskWorkload).toHaveTextContent("T3");
     expect(taskWorkload).toHaveTextContent("done");
   });
+
+  it("uses the active task for unscoped current workload when currentTask points to a newer queued task", () => {
+    renderApp(
+      <RunDetailDrawer
+        initialTab="workload"
+        isOpen
+        onClose={() => undefined}
+        state={{
+          ...workloadState,
+          currentTask: { prompt: "Research second topic", taskId: "task-2" },
+        }}
+      />,
+    );
+
+    const currentTask = screen.getByRole("region", { name: "Current task workload" });
+    expect(currentTask).toHaveTextContent("T1");
+    expect(currentTask).toHaveTextContent("Research current sources");
+    expect(currentTask).not.toHaveTextContent("Research second topic");
+  });
+
+  it("keeps the selected report stable while unrelated live events arrive", () => {
+    const { rerender } = renderApp(<RunDetailDrawer initialTab="reports" isOpen onClose={() => undefined} state={state} />);
+    const reportList = screen.getByRole("list", { name: "Agent report list" });
+
+    fireEvent.click(within(reportList).getByRole("button", { name: "Select T1 Orion report" }));
+    expect(screen.getByRole("article", { name: "Selected agent report" })).toHaveTextContent("Orion");
+
+    rerender(
+      <RunDetailDrawer
+        initialTab="reports"
+        isOpen
+        onClose={() => undefined}
+        state={{
+          ...state,
+          timeline: [
+            ...state.timeline,
+            {
+              agentId: "luma",
+              eventId: "evt-extra",
+              message: "Luma keeps working",
+              taskId: "task-1",
+              timestamp: "2026-05-26T00:00:03.000Z",
+              type: "agent.working",
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("article", { name: "Selected agent report" })).toHaveTextContent("Orion");
+  });
 });

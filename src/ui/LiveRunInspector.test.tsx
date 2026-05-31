@@ -181,7 +181,7 @@ describe("LiveRunInspector", () => {
       const row = rowFor(agent.displayName);
 
       expect(row).toHaveTextContent(agent.displayName);
-      expect(row).toHaveTextContent(state.agents[agent.id].status);
+      expect(row).toHaveTextContent(state.agents[agent.id as keyof typeof state.agents].status);
       expect(within(row).getByRole("button", { name: `View ${agent.displayName} details` })).toBeInTheDocument();
     });
     expect(roster.querySelectorAll(".agent-output-card")).toHaveLength(0);
@@ -219,6 +219,130 @@ describe("LiveRunInspector", () => {
     expect(lumaPreview).toHaveClass("agent-roster-preview-with-badge");
     expect(lumaPreview?.querySelector(".task-badge")).toHaveTextContent("T1");
     expect(lumaPreview).toHaveTextContent("Final answer preview");
+  });
+
+  it("keeps Codex status running while queued work remains after Luma completes an earlier task", () => {
+    renderApp(
+      <LiveRunInspector
+        runMode="codex"
+        state={{
+          ...state,
+          agentQueues: {
+            ...state.agentQueues,
+            orion: [
+              {
+                agentId: "orion",
+                jobId: "task-2-orion",
+                lastMessage: "Queued",
+                prompt: "Research follow-up",
+                queuedAt: "2026-05-28T00:00:02.000Z",
+                status: "queued",
+                taskId: "task-2",
+              },
+            ],
+          },
+          currentTask: { prompt: "Research follow-up", taskId: "task-2" },
+          tasks: [
+            ...state.tasks,
+            {
+              createdAt: "2026-05-28T00:00:02.000Z",
+              finalOutput: null,
+              prompt: "Research follow-up",
+              selectedAgentIds: ["orion"],
+              skippedAgentIds: ["neria", "quill", "argus"],
+              status: "queued",
+              taskId: "task-2",
+            },
+          ],
+        }}
+      />,
+    );
+
+    const inspector = screen.getByRole("region", { name: "Live run inspector" });
+
+    expect(inspector).toHaveTextContent("running trace");
+    expect(inspector).toHaveTextContent(/Codex\s*running/);
+  });
+
+  it("does not preview stale Luma final output while a newer task is active", () => {
+    renderApp(
+      <LiveRunInspector
+        state={{
+          ...state,
+          agents: {
+            ...state.agents,
+            luma: { ...state.agents.luma, lastMessage: "Luma is routing the follow-up", status: "planning" },
+          },
+          currentTask: { prompt: "Research follow-up", taskId: "task-2" },
+          tasks: [
+            ...state.tasks,
+            {
+              createdAt: "2026-05-28T00:00:02.000Z",
+              finalOutput: null,
+              prompt: "Research follow-up",
+              selectedAgentIds: ["orion"],
+              skippedAgentIds: ["neria", "quill", "argus"],
+              status: "running",
+              taskId: "task-2",
+            },
+          ],
+        }}
+      />,
+    );
+
+    const roster = screen.getByRole("region", { name: "Agent roster" });
+    const lumaRow = within(roster)
+      .getAllByRole("listitem")
+      .find((candidate) => within(candidate).queryByRole("heading", { name: "Luma" }));
+
+    expect(lumaRow).toBeDefined();
+    expect(lumaRow).toHaveTextContent("Luma is routing the follow-up");
+    expect(lumaRow).not.toHaveTextContent("Final answer preview");
+  });
+
+  it("previews Luma's latest completed task by completion time", () => {
+    renderApp(
+      <LiveRunInspector
+        state={{
+          ...state,
+          finalOutputs: {
+            "task-1": "Later final answer",
+            "task-2": "Earlier final answer",
+          },
+          tasks: [
+            {
+              completedAt: "2026-05-28T00:00:05.000Z",
+              createdAt: "2026-05-28T00:00:00.000Z",
+              finalOutput: "Later final answer",
+              prompt: "Research slow topic",
+              selectedAgentIds: ["orion"],
+              skippedAgentIds: ["neria", "quill", "argus"],
+              status: "done",
+              taskId: "task-1",
+            },
+            {
+              completedAt: "2026-05-28T00:00:02.000Z",
+              createdAt: "2026-05-28T00:00:01.000Z",
+              finalOutput: "Earlier final answer",
+              prompt: "Rewrite fast paragraph",
+              selectedAgentIds: ["quill"],
+              skippedAgentIds: ["orion", "neria", "argus"],
+              status: "done",
+              taskId: "task-2",
+            },
+          ],
+        }}
+      />,
+    );
+
+    const roster = screen.getByRole("region", { name: "Agent roster" });
+    const lumaRow = within(roster)
+      .getAllByRole("listitem")
+      .find((candidate) => within(candidate).queryByRole("heading", { name: "Luma" }));
+
+    expect(lumaRow).toBeDefined();
+    expect(lumaRow).toHaveTextContent("Later final answer");
+    expect(lumaRow).not.toHaveTextContent("Earlier final answer");
   });
 
   it("groups the compact roster by agent status with low-priority groups collapsed", () => {

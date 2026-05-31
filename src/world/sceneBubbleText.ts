@@ -1,32 +1,43 @@
 import { AGENTS } from "../agents/registry";
-import type { AgentId } from "../agents/types";
+import type { AgentEvent, TaskRecord } from "../events/types";
 import { taskLabelFor } from "../events/taskLabels";
-import type { AgentEvent, RunState } from "../events/types";
 
-function agentDisplayName(agentId: AgentId) {
-  return AGENTS.find((agent) => agent.id === agentId)?.displayName ?? agentId;
+function agentDisplayName(agentId: AgentEvent["agentId"]) {
+  return (
+    AGENTS.find((agent) => agent.id === agentId)?.displayName ??
+    agentId
+      .split(/[-_\s]+/)
+      .filter(Boolean)
+      .map((part) => `${part.charAt(0).toLocaleUpperCase()}${part.slice(1)}`)
+      .join(" ")
+  );
 }
 
-function taskPromptFor(tasks: RunState["tasks"], event: AgentEvent) {
-  return tasks.find((task) => task.taskId === event.taskId)?.prompt ?? event.message;
+function stringPayload(event: AgentEvent, key: string): string | undefined {
+  const payload = event.payload as Record<string, unknown> | undefined;
+  const value = payload?.[key];
+
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function taskSummary(prompt: string, maxLength = 68) {
-  const text = prompt.trim().replace(/\s+/g, " ");
-
-  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+function taskPromptFor(tasks: TaskRecord[], taskId: string) {
+  return tasks.find((task) => task.taskId === taskId)?.prompt.trim();
 }
 
-export function bubbleTextFromEvent(event: AgentEvent, tasks: RunState["tasks"]) {
+export function bubbleTextFromEvent(event: AgentEvent, tasks: TaskRecord[]) {
   const taskLabel = taskLabelFor(tasks, event.taskId);
-  const prompt = taskSummary(taskPromptFor(tasks, event));
 
   if (event.type === "agent.prompted" && event.payload) {
-    return `[${taskLabel}] ${agentDisplayName(event.payload.recipientAgentId)} task: ${prompt}`;
+    const prompt = taskPromptFor(tasks, event.taskId) ?? stringPayload(event, "promptExcerpt") ?? stringPayload(event, "speechBubble");
+    const recipientName = agentDisplayName(event.payload.recipientAgentId);
+
+    return prompt ? `[${taskLabel}] ${recipientName} task: ${prompt}` : undefined;
   }
 
   if (event.type === "agent.reporting") {
-    return `[${taskLabel}] ${agentDisplayName(event.agentId)} answered: ${prompt}`;
+    const report = stringPayload(event, "speechBubble") ?? stringPayload(event, "reportExcerpt") ?? stringPayload(event, "report");
+
+    return report ? `[${taskLabel}] ${agentDisplayName(event.agentId)} answered: ${report}` : undefined;
   }
 
   return undefined;

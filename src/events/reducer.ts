@@ -134,7 +134,7 @@ export function updateAgentJob(state: RunState, jobId: string, patch: Partial<Ag
           ...state.agents[agentId],
           currentJobId: jobId,
           lastMessage: patch.lastMessage ?? state.agents[agentId].lastMessage,
-          status: agentId === "argus" ? ("reviewing" as const) : ("working" as const),
+          status: state.agents[agentId].definition.systemRole === "ReviewAgent" ? ("reviewing" as const) : ("working" as const),
         }
       : currentJob && (patch.status === "done" || patch.status === "failed")
         ? {
@@ -163,7 +163,7 @@ export function reduceAgentEvent(state: RunState, event: AgentEvent): RunState {
   const isTerminalManagerEvent = event.type === "agent.done" && event.agentId === "luma";
   const finalOutput =
     event.type === "task.created"
-      ? state.finalOutput
+      ? null
       : isTerminalManagerEvent && typeof event.payload?.finalOutput === "string"
         ? event.payload.finalOutput
         : state.finalOutput;

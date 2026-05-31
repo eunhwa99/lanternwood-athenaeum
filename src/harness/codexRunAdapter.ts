@@ -6,6 +6,7 @@ type CodexRunAdapterOptions = {
   agentJobEndpoint?: string;
   endpoint?: string;
   fetchImpl?: typeof fetch;
+  requestToken?: string;
   synthesisEndpoint?: string;
 };
 
@@ -47,11 +48,13 @@ async function* streamEvents(
   body: Record<string, unknown>,
   options: RunAdapterOptions,
   isTerminalEvent: (event: AgentEvent) => boolean,
+  requestToken?: string,
 ) {
   const response = await fetchImpl(endpoint, {
     body: JSON.stringify(body),
     headers: {
       "Content-Type": "application/json",
+      ...(requestToken ? { "X-Lanternwood-Codex-Token": requestToken } : {}),
     },
     method: "POST",
     signal: options.signal,
@@ -138,6 +141,7 @@ export function createCodexRunAdapter({
   agentJobEndpoint,
   endpoint = "/api/runs",
   fetchImpl = fetch,
+  requestToken,
   synthesisEndpoint,
 }: CodexRunAdapterOptions = {}): RunAdapter {
   const resolvedAgentJobEndpoint = agentJobEndpoint ?? endpointSibling(endpoint, "agent-jobs");
@@ -148,9 +152,15 @@ export function createCodexRunAdapter({
       yield* streamEvents(
         fetchImpl,
         endpoint,
-        { input, ...(options.previousRun ? { previousRun: options.previousRun } : {}) },
+        {
+          input,
+          ...(options.previousRun ? { previousRun: options.previousRun } : {}),
+          ...(options.sandboxMode ? { sandboxMode: options.sandboxMode } : {}),
+          ...(options.workspacePath ? { workspacePath: options.workspacePath } : {}),
+        },
         options,
         (event) => event.agentId === "luma" && (event.type === "agent.done" || event.type === "agent.failed"),
+        requestToken,
       );
     },
 
@@ -163,12 +173,16 @@ export function createCodexRunAdapter({
           delegatedPrompt: job.delegatedPrompt,
           input: job.prompt,
           ...(options.previousRun ? { previousRun: options.previousRun } : {}),
+          ...(options.sandboxMode ? { sandboxMode: options.sandboxMode } : {}),
+          ...(job.specialistReports ? { reports: job.specialistReports } : {}),
           selectedAgentIds: job.selectedAgentIds,
           skippedAgentIds: job.skippedAgentIds,
           taskId: job.taskId,
+          ...(options.workspacePath ? { workspacePath: options.workspacePath } : {}),
         },
         options,
-        (event) => event.agentId === job.agentId && (event.type === "agent.reporting" || event.type === "agent.failed"),
+        (event) => (event.agentId === job.agentId && event.type === "agent.reporting") || event.type === "agent.failed",
+        requestToken,
       );
     },
 
@@ -179,13 +193,16 @@ export function createCodexRunAdapter({
         {
           input: task.prompt,
           ...(options.previousRun ? { previousRun: options.previousRun } : {}),
+          ...(options.sandboxMode ? { sandboxMode: options.sandboxMode } : {}),
           reports: task.reports,
           selectedAgentIds: task.selectedAgentIds,
           skippedAgentIds: task.skippedAgentIds,
           taskId: task.taskId,
+          ...(options.workspacePath ? { workspacePath: options.workspacePath } : {}),
         },
         options,
         (event) => event.agentId === "luma" && (event.type === "agent.done" || event.type === "agent.failed"),
+        requestToken,
       );
     },
   };
