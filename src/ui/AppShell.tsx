@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { AGENTS } from "../agents/registry";
 import type { AgentId } from "../agents/types";
- import { createInitialRunState, enqueueAgentJob, enqueueTask, reduceAgentEvent, updateAgentJob, updateTask } from "../events/reducer";
+ import { createInitialRunState, reduceAgentEvent, updateAgentJob, updateTask } from "../events/reducer";
  import { taskLabelFor } from "../events/taskLabels";
  import {
    type AgentEvent,
@@ -9,13 +9,11 @@ import type { AgentId } from "../agents/types";
    type AgentStatus,
    type PreviousRunContext,
    type RunState,
-   type SpecialistAgentId,
    type TaskRecord,
  } from "../events/types";
  import { createCodexRunAdapter } from "../harness/codexRunAdapter";
  import { createMockRunAdapter } from "../harness/mockRunAdapter";
- import { planRoute } from "../harness/routePlanning";
- import type { AgentJobRequest, RunAdapter, RunAdapterOptions, SynthesisTaskRequest } from "../harness/runAdapter";
+ import type { RunAdapter, RunAdapterOptions } from "../harness/runAdapter";
  import { createTaskId } from "../harness/taskIds";
  import { LanternwoodScene } from "../world/LanternwoodScene";
  import { LiveRunInspector } from "./LiveRunInspector";
@@ -23,6 +21,7 @@ import type { AgentId } from "../agents/types";
  import { TaskInput } from "./TaskInput";
  import { previewText } from "./runDetails";
  import type { RunDetailsTab } from "./runDetails";
+ import { useQueuedRunOrchestrator } from "./useQueuedRunOrchestrator";
 
  declare global {
    interface Window {
@@ -97,45 +96,11 @@ import type { AgentId } from "../agents/types";
    workspaces?: WorkspaceOption[];
  };
 
- type TaskRuntime = {
-   completedAgentIds: Set<SpecialistAgentId>;
-   failedAgentIds: Set<SpecialistAgentId>;
-   finalizing: boolean;
-   previousRun?: PreviousRunContext;
-   prompt: string;
-   queuedAgentIds: Set<SpecialistAgentId>;
-   reports: Partial<Record<AgentId, string>>;
-   sandboxMode: RunAdapterOptions["sandboxMode"];
-   selectedAgentIds: SpecialistAgentId[];
-   skippedAgentIds: SpecialistAgentId[];
-   synthesisQueued: boolean;
-   taskId: string;
-   workspacePath?: string;
- };
-
  const defaultRunAdapter = createDefaultRunAdapter();
  const defaultRunMode = import.meta.env.VITE_RUN_ADAPTER === "codex" ? "codex" : "mock";
  const COMPLETED_TASK_PREVIEW_LIMIT = 5;
  const RECENT_WORKSPACES_STORAGE_KEY = "lanternwood.recentWorkspaces";
  const preferredWorkspaceNames = ["lanternwood-athenaeum", "drive", "code", "MCPContentSearch"];
- const specialistAgentIds = AGENTS.filter((agent) => agent.id !== "luma").map((agent) => agent.id);
- const emptySpecialistQueues = () =>
-   Object.fromEntries(specialistAgentIds.map((agentId) => [agentId, []])) as unknown as Record<SpecialistAgentId, AgentJobRequest[]>;
-
- function sentenceCaseAfterName(instruction: string) {
-   return instruction.charAt(0).toLocaleLowerCase() + instruction.slice(1);
- }
-
- const delegatedPrompts = Object.fromEntries(
-   AGENTS.filter((agent) => agent.id !== "luma").map((agent) => [
-     agent.id,
-     `${agent.displayName}, ${sentenceCaseAfterName(agent.promptInstruction)}`,
-   ]),
- ) as Record<SpecialistAgentId, string>;
-
- function isReviewAgent(agentId: AgentId) {
-   return AGENTS.find((agent) => agent.id === agentId)?.systemRole === "ReviewAgent";
- }
 
  function createClientEvent(
    taskId: string,
@@ -989,19 +954,21 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
    });
    const runStateRef = useRef<RunState>(initialState);
    const abortControllerRef = useRef<AbortController | null>(null);
-   const queueAbortControllersRef = useRef<Set<AbortController>>(new Set());
    const activeRunRef = useRef<symbol | null>(null);
-  const activeSpecialistsRef = useRef<Record<SpecialistAgentId, boolean>>(
-    Object.fromEntries(specialistAgentIds.map((agentId) => [agentId, false])) as Record<SpecialistAgentId, boolean>,
-  );
-   const specialistQueuesRef = useRef<Record<SpecialistAgentId, AgentJobRequest[]>>(emptySpecialistQueues());
-   const synthesisActiveRef = useRef(false);
-   const synthesisQueueRef = useRef<string[]>([]);
    const taskEventsRef = useRef<Map<string, AgentEvent[]>>(new Map());
-   const taskIdCounterRef = useRef(0);
-   const taskRuntimeRef = useRef<Map<string, TaskRuntime>>(new Map());
    const previousRunRef = useRef<PreviousRunContext | null>(null);
    const queuedRunAdapter = supportsQueuedRuns(runAdapter) ? runAdapter : null;
+   const { queueRun, stopQueuedRuns } = useQueuedRunOrchestrator({
+     commitEvent,
+     getPreviousRun: () => previousRunRef.current,
+     getRunState: () => runStateRef.current,
+     getSandboxMode: selectedSandboxMode,
+     getTaskEventCount: (taskId) => taskEventsRef.current.get(taskId)?.length ?? 0,
+     getWorkspacePath: selectedWorkspacePath,
+     onRunEpoch: () => setRunEpoch((current) => current + 1),
+     queuedRunAdapter,
+     setRunStateSynced,
+   });
    const hasQueuedWork =
      runState.tasks.some(isTaskInFlight) ||
      Object.values(runState.agentQueues).some((jobs) => jobs.some((job) => job.status === "queued" || job.status === "running"));
@@ -1140,499 +1107,6 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
      }
    }
 
-   function createQueuedTaskId(prompt: string) {
-     taskIdCounterRef.current += 1;
-
-     return `${createTaskId(prompt)}-${taskIdCounterRef.current}`;
-   }
-
-   function nextTaskEventIndex(taskId: string) {
-     return (taskEventsRef.current.get(taskId)?.length ?? 0) + 1;
-   }
-
-   function discardQueuedRuntimeJobsForTask(taskId: string, exceptJob?: AgentJobRequest) {
-     for (const agentId of specialistAgentIds) {
-       specialistQueuesRef.current[agentId] = specialistQueuesRef.current[agentId].filter(
-         (job) => job === exceptJob || job.taskId !== taskId,
-       );
-     }
-
-     synthesisQueueRef.current = synthesisQueueRef.current.filter((queuedTaskId) => queuedTaskId !== taskId);
-   }
-
-   function failQueuedStateJobsForTask(state: RunState, taskId: string, reason: string, completedAt: string, exceptJobId?: string) {
-     return Object.values(state.agentQueues)
-       .flat()
-       .filter((job) => job.taskId === taskId && job.jobId !== exceptJobId && job.status === "queued")
-       .reduce(
-         (current, job) =>
-           updateAgentJob(current, job.jobId, {
-             completedAt,
-             error: reason,
-             lastMessage: reason,
-             status: "failed",
-           }),
-         state,
-       );
-   }
-
-   function enqueueSpecialistJob(taskId: string, agentId: SpecialistAgentId) {
-     const runtime = taskRuntimeRef.current.get(taskId);
-
-     if (!runtime || runtime.queuedAgentIds.has(agentId) || runtime.completedAgentIds.has(agentId)) {
-       return;
-     }
-
-     const delegatedPrompt = delegatedPrompts[agentId];
-     const job: AgentJobRequest = {
-       agentId,
-       delegatedPrompt,
-       prompt: runtime.prompt,
-       selectedAgentIds: runtime.selectedAgentIds,
-       skippedAgentIds: runtime.skippedAgentIds,
-      specialistReports: isReviewAgent(agentId) ? runtime.reports : undefined,
-       taskId,
-     };
-
-     runtime.queuedAgentIds.add(agentId);
-     specialistQueuesRef.current[agentId].push(job);
-     commitEvent(
-       createClientEvent(taskId, nextTaskEventIndex(taskId), "luma", "agent.prompted", `Luma prompts ${agentId}`, {
-         prompt: delegatedPrompt,
-         promptExcerpt: delegatedPrompt,
-         recipientAgentId: agentId,
-         senderAgentId: "luma",
-         speechBubble: delegatedPrompt,
-       }),
-     );
-     setRunStateSynced((current) =>
-       enqueueAgentJob(current, {
-         agentId,
-         jobId: `${taskId}-${agentId}`,
-         prompt: runtime.prompt,
-         queuedAt: new Date().toISOString(),
-         taskId,
-       }),
-     );
-     void runSpecialistQueue(agentId);
-   }
-function queueSynthesis(taskId: string) {
-     const runtime = taskRuntimeRef.current.get(taskId);
-
-     if (!runtime || runtime.synthesisQueued) {
-       return;
-     }
-
-     runtime.synthesisQueued = true;
-     discardQueuedRuntimeJobsForTask(taskId);
-     synthesisQueueRef.current.push(taskId);
-     setRunStateSynced((current) =>
-       enqueueAgentJob(current, {
-         agentId: "luma",
-         jobId: `${taskId}-luma-synthesis`,
-         prompt: runtime.prompt,
-         queuedAt: new Date().toISOString(),
-         taskId,
-       }),
-     );
-     void runSynthesisQueue();
-   }
-
-   function maybeQueueSynthesis(taskId: string) {
-     const runtime = taskRuntimeRef.current.get(taskId);
-
-     if (!runtime || runtime.synthesisQueued || runtime.finalizing) {
-       return;
-     }
-
-     if (runtime.failedAgentIds.size > 0) {
-       const now = new Date().toISOString();
-       discardQueuedRuntimeJobsForTask(taskId);
-       setRunStateSynced((current) =>
-         failQueuedStateJobsForTask(
-           updateTask(current, taskId, {
-             completedAt: now,
-             error: "One or more delegated agent jobs failed.",
-             status: "failed",
-           }),
-           taskId,
-           "One or more delegated agent jobs failed.",
-           now,
-         ),
-       );
-       return;
-     }
-
-     const reviewAgentId = runtime.selectedAgentIds.find(isReviewAgent);
-     const primaryAgentIds = runtime.selectedAgentIds.filter((agentId) => agentId !== reviewAgentId);
-     const primaryReportsComplete = primaryAgentIds.every((agentId) => runtime.completedAgentIds.has(agentId));
-
-     if (
-       reviewAgentId &&
-       primaryReportsComplete &&
-       !runtime.queuedAgentIds.has(reviewAgentId) &&
-       !runtime.completedAgentIds.has(reviewAgentId) &&
-       !runtime.failedAgentIds.has(reviewAgentId)
-     ) {
-       enqueueSpecialistJob(taskId, reviewAgentId);
-       return;
-     }
-
-     if (runtime.selectedAgentIds.every((agentId) => runtime.completedAgentIds.has(agentId))) {
-       queueSynthesis(taskId);
-     }
-   }
-
-   async function runSynthesisQueue() {
-     if (!queuedRunAdapter || synthesisActiveRef.current) {
-       return;
-     }
-
-     const taskId = synthesisQueueRef.current[0];
-     const runtime = taskRuntimeRef.current.get(taskId);
-
-     if (!taskId || !runtime) {
-       return;
-     }
-
-     const jobId = `${taskId}-luma-synthesis`;
-     const abortController = new AbortController();
-     synthesisActiveRef.current = true;
-     runtime.finalizing = true;
-     queueAbortControllersRef.current.add(abortController);
-     setRunStateSynced((current) =>
-       updateAgentJob(updateTask(current, taskId, { status: "synthesizing" }), jobId, {
-         lastMessage: "Luma is synthesizing the task result",
-         startedAt: new Date().toISOString(),
-         status: "running",
-       }),
-     );
-
-     const request: SynthesisTaskRequest = {
-       prompt: runtime.prompt,
-       reports: runtime.reports,
-       selectedAgentIds: runtime.selectedAgentIds,
-       skippedAgentIds: runtime.skippedAgentIds,
-       taskId,
-     };
-     const options: RunAdapterOptions = {
-       previousRun: runtime.previousRun,
-       sandboxMode: runtime.sandboxMode,
-       signal: abortController.signal,
-       taskId,
-       workspacePath: runtime.workspacePath,
-     };
-     let terminalFailure: AgentEvent | undefined;
-
-     try {
-       for await (const event of queuedRunAdapter.synthesizeTask(request, options)) {
-         if (abortController.signal.aborted) {
-           throw new Error("Run aborted");
-         }
-
-         if (event.type === "agent.failed") {
-           terminalFailure = event;
-         }
-
-         commitEvent(event, (state) =>
-           event.type === "agent.failed"
-             ? updateAgentJob(
-                 updateTask(state, taskId, {
-                   completedAt: event.timestamp,
-                   error: event.message,
-                   status: "failed",
-                 }),
-                 jobId,
-                 {
-                   completedAt: event.timestamp,
-                   error: event.message,
-                   lastMessage: event.message,
-                   status: "failed",
-                 },
-               )
-             : updateAgentJob(state, jobId, { lastMessage: event.message }),
-         );
-       }
-
-       if (abortController.signal.aborted) {
-         throw new Error("Run aborted");
-       }
-
-       if (terminalFailure) {
-         return;
-       }
-
-       setRunStateSynced((current) =>
-         updateAgentJob(current, jobId, {
-           completedAt: new Date().toISOString(),
-           lastMessage: "Synthesis complete",
-           status: "done",
-         }),
-       );
-     } catch (error) {
-       const message = messageFromError(error);
-       commitEvent(createClientEvent(taskId, runStateRef.current.timeline.length + 1, "luma", "agent.failed", message), (state) =>
-         updateAgentJob(
-           updateTask(state, taskId, {
-             completedAt: new Date().toISOString(),
-             error: message,
-             status: "failed",
-           }),
-           jobId,
-           {
-             completedAt: new Date().toISOString(),
-             error: message,
-             lastMessage: message,
-             status: "failed",
-           },
-         ),
-       );
-     } finally {
-       queueAbortControllersRef.current.delete(abortController);
-       if (synthesisQueueRef.current[0] === taskId) {
-         synthesisQueueRef.current.shift();
-       }
-       runtime.finalizing = false;
-       synthesisActiveRef.current = false;
-       void runSynthesisQueue();
-     }
-   }
-
-   async function runSpecialistQueue(agentId: SpecialistAgentId) {
-     if (!queuedRunAdapter || activeSpecialistsRef.current[agentId]) {
-       return;
-     }
-
-     const job = specialistQueuesRef.current[agentId][0];
-
-     if (!job) {
-       return;
-     }
-
-     const jobId = `${job.taskId}-${agentId}`;
-     const task = runStateRef.current.tasks.find((candidate) => candidate.taskId === job.taskId);
-
-     if (task?.status === "failed" || task?.status === "done") {
-       specialistQueuesRef.current[agentId].shift();
-       setRunStateSynced((current) =>
-         updateAgentJob(current, jobId, {
-           completedAt: new Date().toISOString(),
-           error: `Task already ${task.status}`,
-           lastMessage: `Task already ${task.status}`,
-           status: "failed",
-         }),
-       );
-       void runSpecialistQueue(agentId);
-       return;
-     }
-
-     const abortController = new AbortController();
-     let report: string | undefined;
-     let terminalFailure: AgentEvent | undefined;
-     activeSpecialistsRef.current[agentId] = true;
-     queueAbortControllersRef.current.add(abortController);
-     setRunStateSynced((current) =>
-       updateAgentJob(updateTask(current, job.taskId, { status: "running" }), jobId, {
-         lastMessage: `${agentDisplayName(agentId)} is working`,
-         startedAt: new Date().toISOString(),
-         status: "running",
-       }),
-     );
-
-     try {
-       for await (const event of queuedRunAdapter.startAgentJob(job, {
-         previousRun: taskRuntimeRef.current.get(job.taskId)?.previousRun,
-         sandboxMode: taskRuntimeRef.current.get(job.taskId)?.sandboxMode,
-         signal: abortController.signal,
-         taskId: job.taskId,
-         workspacePath: taskRuntimeRef.current.get(job.taskId)?.workspacePath,
-       })) {
-         if (abortController.signal.aborted) {
-           throw new Error("Run aborted");
-         }
-
-         const payload = event.payload as Record<string, unknown> | undefined;
-
-         if (event.type === "agent.reporting" && typeof payload?.report === "string") {
-           report = payload.report;
-           taskRuntimeRef.current.get(job.taskId)!.reports[agentId] = payload.report;
-         }
-
-         if (event.type === "agent.failed") {
-           terminalFailure = event;
-           discardQueuedRuntimeJobsForTask(job.taskId, job);
-         }
-
-         commitEvent(event, (state) =>
-           event.type === "agent.failed"
-             ? failQueuedStateJobsForTask(
-                 updateAgentJob(
-                   updateTask(
-                     event.agentId === agentId
-                       ? state
-                       : {
-                           ...state,
-                           agents: {
-                             ...state.agents,
-                             [agentId]: {
-                               ...state.agents[agentId],
-                               lastMessage: event.message,
-                               status: "failed",
-                             },
-                           },
-                         },
-                     job.taskId,
-                     {
-                       completedAt: event.timestamp,
-                       error: event.message,
-                       status: "failed",
-                     },
-                   ),
-                   jobId,
-                   {
-                     completedAt: event.timestamp,
-                     error: event.message,
-                     lastMessage: event.message,
-                     output: report,
-                     status: "failed",
-                   },
-                 ),
-                 job.taskId,
-                 event.message,
-                 event.timestamp,
-                 jobId,
-               )
-             : updateAgentJob(state, jobId, {
-                 lastMessage: event.message,
-                 output: report,
-               }),
-         );
-       }
-
-       if (abortController.signal.aborted) {
-         throw new Error("Run aborted");
-       }
-
-       if (terminalFailure) {
-         taskRuntimeRef.current.get(job.taskId)?.failedAgentIds.add(agentId);
-         return;
-       }
-
-       taskRuntimeRef.current.get(job.taskId)?.completedAgentIds.add(agentId);
-       setRunStateSynced((current) =>
-         updateAgentJob(current, jobId, {
-           completedAt: new Date().toISOString(),
-           lastMessage: report ?? "Agent job complete",
-           output: report,
-           status: "done",
-         }),
-       );
-       maybeQueueSynthesis(job.taskId);
-     } catch (error) {
-       const message = messageFromError(error);
-       const now = new Date().toISOString();
-       taskRuntimeRef.current.get(job.taskId)?.failedAgentIds.add(agentId);
-       discardQueuedRuntimeJobsForTask(job.taskId, job);
-       commitEvent(createClientEvent(job.taskId, runStateRef.current.timeline.length + 1, agentId, "agent.failed", message), (state) =>
-         failQueuedStateJobsForTask(
-           updateAgentJob(
-             updateTask(state, job.taskId, {
-               completedAt: now,
-               error: message,
-               status: "failed",
-             }),
-             jobId,
-             {
-               completedAt: now,
-               error: message,
-               lastMessage: message,
-               status: "failed",
-             },
-           ),
-           job.taskId,
-           message,
-           now,
-           jobId,
-         ),
-       );
-     } finally {
-       queueAbortControllersRef.current.delete(abortController);
-       if (specialistQueuesRef.current[agentId][0] === job) {
-         specialistQueuesRef.current[agentId].shift();
-       }
-       activeSpecialistsRef.current[agentId] = false;
-       void runSpecialistQueue(agentId);
-     }
-   }
-
- function queueRun(prompt: string) {
-     if (!queuedRunAdapter) {
-       void startRun(prompt);
-       return;
-     }
-
-     const taskId = createQueuedTaskId(prompt);
-     const createdAt = new Date().toISOString();
-     const routePlan = planRoute(prompt, AGENTS);
-     const selectedAgentIds = routePlan.selectedAgentIds;
-     const skippedAgentIds = routePlan.skippedAgentIds;
-     taskRuntimeRef.current.set(taskId, {
-       completedAgentIds: new Set(),
-       failedAgentIds: new Set(),
-       finalizing: false,
-       previousRun: previousRunRef.current ?? undefined,
-       prompt,
-       queuedAgentIds: new Set(),
-       reports: {},
-       sandboxMode: selectedSandboxMode(),
-       selectedAgentIds,
-       skippedAgentIds,
-       synthesisQueued: false,
-       taskId,
-       workspacePath: selectedWorkspacePath(),
-     });
-     taskEventsRef.current.set(taskId, []);
-     setRunEpoch((current) => current + 1);
-     setRunStateSynced((current) =>
-       enqueueTask(current, {
-         createdAt,
-         prompt,
-         selectedAgentIds,
-         skippedAgentIds,
-         taskId,
-       }),
-     );
-
-     commitEvent(createClientEvent(taskId, 1, "luma", "task.created", prompt));
-     commitEvent(createClientEvent(taskId, 2, "luma", "agent.planning", "Luma is arranging the reading lamps"));
-     commitEvent(createClientEvent(taskId, 3, "luma", "route.planned", "Luma selected a specialist route", routePlan));
-     setRunStateSynced((current) => updateTask(current, taskId, { status: "queued" }));
-
-     if (selectedAgentIds.length > 0) {
-       commitEvent(
-         createClientEvent(
-           taskId,
-           4,
-           "luma",
-           "agent.delegated",
-           `Luma selected: ${selectedAgentIds.map((agentId) => agentDisplayName(agentId)).join(", ")}`,
-         ),
-       );
-     }
-
-     const reviewAgentId = selectedAgentIds.find(isReviewAgent);
-     const initialAgentIds =
-       reviewAgentId && selectedAgentIds.some((agentId) => agentId !== reviewAgentId)
-         ? selectedAgentIds.filter((agentId) => agentId !== reviewAgentId)
-         : selectedAgentIds;
-
-     initialAgentIds.forEach((agentId) => enqueueSpecialistJob(taskId, agentId));
-
-     if (selectedAgentIds.length === 0) {
-       queueSynthesis(taskId);
-     }
-   }
-
    async function startRun(prompt: string) {
      const runToken = Symbol("run");
      activeRunRef.current = runToken;
@@ -1729,11 +1203,7 @@ function queueSynthesis(taskId: string) {
 
    function stopRun() {
      abortControllerRef.current?.abort();
-     for (const abortController of queueAbortControllersRef.current) {
-       abortController.abort();
-     }
-     specialistQueuesRef.current = emptySpecialistQueues();
-     synthesisQueueRef.current = [];
+     stopQueuedRuns();
      setRunStateSynced((current) => {
        const now = new Date().toISOString();
        let next = current;
