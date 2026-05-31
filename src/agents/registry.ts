@@ -1,63 +1,60 @@
-import type { AgentDefinition, AgentId } from "./types";
+import type { AgentDefinition } from "./types";
 
-export const AGENTS: AgentDefinition[] = [
-  {
-    id: "luma",
-    displayName: "Luma",
-    systemRole: "ManagerAgent",
-    worldRole: "Chief librarian and task coordinator",
-    persona:
-      "Warm, precise coordinator who decomposes work, delegates carefully, and keeps the final answer grounded.",
-    color: "#f2c66d",
-    homePosition: { x: 480, y: 250 },
-    futureTools: ["agent-routing", "result-synthesis", "approval-gate"],
-  },
-  {
-    id: "orion",
-    displayName: "Orion",
-    systemRole: "ResearchAgent",
-    worldRole: "Star-map researcher",
-    persona:
-      "Curious source-checker who explores references, notes uncertainty, and returns concise research findings.",
-    color: "#6ca7bd",
-    homePosition: { x: 220, y: 160 },
-    futureTools: ["web-search", "file-search", "source-citations"],
-  },
-  {
-    id: "neria",
-    displayName: "Neria",
-    systemRole: "MemoryAgent",
-    worldRole: "Keeper of records",
-    persona:
-      "Careful archivist who recalls stable preferences, separates memory from assumptions, and protects sensitive context.",
-    color: "#8fa765",
-    homePosition: { x: 260, y: 420 },
-    futureTools: ["memory-search", "preference-lookup", "context-summary"],
-  },
-  {
-    id: "quill",
-    displayName: "Quill",
-    systemRole: "DocumentAgent",
-    worldRole: "Scribe and illuminator",
-    persona:
-      "Clear writer who turns findings into useful notes, drafts, and structured documents without ornamental excess.",
-    color: "#b991c8",
-    homePosition: { x: 700, y: 420 },
-    futureTools: ["document-draft", "notion-export", "markdown-format"],
-  },
-  {
-    id: "argus",
-    displayName: "Argus",
-    systemRole: "ReviewAgent",
-    worldRole: "Watchtower sentinel",
-    persona:
-      "Sober reviewer who checks risks, missing evidence, unsafe actions, and whether the output is ready to show.",
-    color: "#bd806e",
-    homePosition: { x: 740, y: 170 },
-    futureTools: ["quality-review", "risk-check", "approval-review"],
-  },
-];
+const builtinAgentOrder = ["luma", "orion", "neria", "quill", "argus"];
 
-export function getAgentById(agentId: AgentId): AgentDefinition | undefined {
+type AgentJson = Omit<AgentDefinition, "persona">;
+
+const authoredAgentModules = import.meta.glob<AgentJson>("../../.agents/lanternwood/agents/*/agent.json", {
+  eager: true,
+  import: "default",
+});
+const builtinAgentModules = import.meta.glob<AgentJson>("../../.agents/lanternwood/agents/*.json", {
+  eager: true,
+  import: "default",
+});
+const personaModules = import.meta.glob<string>("../../.agents/lanternwood/agents/*/persona.md", {
+  eager: true,
+  import: "default",
+  query: "?raw",
+});
+
+function agentDirectory(path: string) {
+  return path.slice(0, path.lastIndexOf("/"));
+}
+
+function personaPathFor(path: string, agent: AgentJson) {
+  if (path.endsWith("/agent.json")) {
+    return `${agentDirectory(path)}/persona.md`;
+  }
+
+  return `${agentDirectory(path)}/${agent.id}/persona.md`;
+}
+
+function agentOrder(agent: AgentDefinition) {
+  const builtinIndex = builtinAgentOrder.indexOf(agent.id);
+
+  return builtinIndex >= 0 ? builtinIndex : builtinAgentOrder.length;
+}
+
+function normalizeColor(color: string) {
+  return color.toLocaleLowerCase();
+}
+
+const agentEntries = [...Object.entries(builtinAgentModules), ...Object.entries(authoredAgentModules)];
+const agentsById = new Map<string, AgentDefinition>();
+
+for (const [path, agent] of agentEntries) {
+  agentsById.set(agent.id, {
+    ...agent,
+    color: normalizeColor(agent.color),
+    persona: personaModules[personaPathFor(path, agent)]?.trim() ?? "",
+  });
+}
+
+export const AGENTS: AgentDefinition[] = Array.from(agentsById.values()).sort(
+  (left, right) => agentOrder(left) - agentOrder(right) || left.id.localeCompare(right.id),
+);
+
+export function getAgentById(agentId: string): AgentDefinition | undefined {
   return AGENTS.find((agent) => agent.id === agentId);
 }

@@ -1,0 +1,1 @@
+Clear writer who turns findings into useful notes, drafts, and structured documents without ornamental excess.

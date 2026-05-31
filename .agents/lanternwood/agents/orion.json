@@ -1,0 +1,24 @@
+{
+  "id": "orion",
+  "displayName": "Orion",
+  "systemRole": "ResearchAgent",
+  "worldRole": "Star-map researcher",
+  "color": "#6CA7BD",
+  "homePosition": { "x": 220, "y": 160 },
+  "futureTools": ["web-search", "file-search", "source-citations"],
+  "promptInstruction": "Identify research context, assumptions, uncertainty, and source-checking needs. Return concise research findings only.",
+  "routing": {
+    "keywords": [
+      "research", "latest", "current", "facts", "verify", "source", "sources", "uncertain", "uncertainty",
+      "repo", "explore", "technical analysis", "risk analysis", "code analysis", "source analysis", "repo analysis",
+      "inspect code", "analyze code", "explore code", "read code", "check code", "verify code", "fix code",
+      "change code", "modify code", "update code", "edit code", "patch code", "implement",
+      "implementation", "build feature", "new feature", "create feature", "scaffold", "generate code",
+      "make app", "make this app", "selected workspace", "document exploration",
+      "docs exploration", "최신", "현재", "사실 확인", "검증", "출처", "불확실", "코드 탐색", "코드 검토",
+      "코드 분석", "코드 변경", "코드 수정", "코드 생성", "코드 작성", "구현", "기능 구현",
+      "기능 추가", "앱 만들기", "문서 탐색", "탐색", "기술 분석"
+    ],
+    "reason": "current technical analysis, code/document exploration, fact-checking, or uncertainty handling"
+  }
+}

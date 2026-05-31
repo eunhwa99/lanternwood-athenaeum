@@ -30,7 +30,7 @@ export function TaskInput({ onSubmit, onStop, disabled = false, isRunning = fals
       />
       <div className="task-input-actions">
         <button disabled={disabled} type="submit">
-          Send to Luma
+          Send to Queue
         </button>
         {isRunning ? (
           <button className="task-stop-button" onClick={onStop} type="button">

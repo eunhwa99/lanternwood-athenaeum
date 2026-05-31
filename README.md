@@ -22,8 +22,11 @@ npm run dev:all
 Equivalent separate-terminal commands:
 
 ```sh
-npm run dev:codex-api
-npm run dev:codex
+# Terminal 1
+LANTERNWOOD_CODEX_HEALTH_TOKEN=lanternwood-local-dev npm run dev:codex-api
+
+# Terminal 2
+VITE_LANTERNWOOD_CODEX_REQUEST_TOKEN=lanternwood-local-dev npm run dev:codex
 ```
 
 Codex mode shells out through the approved local backend path. Make sure the Codex CLI is logged in before using it:
@@ -47,10 +50,6 @@ LANTERNWOOD_CODEX_PORT=8787
 ## Verification
 
 ```sh
-npm run typecheck
-npm test
-npm run lint
-npm run build
-npm run e2e
+npm run verify
 git diff --check
 ```

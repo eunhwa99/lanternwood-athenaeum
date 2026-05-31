@@ -2,11 +2,12 @@ import { Application, extend, useApplication } from "@pixi/react";
 import { Container, Graphics, Text } from "pixi.js";
 import { useEffect, useRef } from "react";
 import type { AgentId } from "../agents/types";
-import type { AgentEvent, AgentStatus, RunState } from "../events/types";
+import type { AgentStatus, RunState } from "../events/types";
 import { createAgentSprite, updateAgentSprite, type AgentSpriteView } from "./AgentSprite";
 import { approach, getAgentSceneTarget } from "./avatarAnimation";
+import { bubbleTextFromEvent } from "./sceneBubbleText";
 import { createSceneBackground } from "./sceneBackground";
-import { SCENE_SIZE, getAgentScenePosition, getAgentWorkPosition } from "./sceneLayout";
+import { SCENE_SIZE, getAgentBubblePosition, getAgentScenePosition, getAgentWorkPosition } from "./sceneLayout";
 
 extend({ Container, Graphics, Text });
 
@@ -99,13 +100,6 @@ function drawBubble(view: BubbleView, content: string) {
     color: 0xe4b969,
     width: 2,
   });
-}
-
-function bubbleTextFromEvent(event: AgentEvent) {
-  const payload = event.payload as Record<string, unknown> | undefined;
-  const value = payload?.speechBubble ?? payload?.promptExcerpt ?? payload?.reportExcerpt;
-
-  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 function updateDebugBubbles(bubbles: BubbleView[], elapsedSeconds: number) {
@@ -220,7 +214,9 @@ function SceneContent({ runEpoch = 0, state }: LanternwoodSceneProps) {
   const bubblesRef = useRef<BubbleView[]>([]);
   const dispatchTargetRef = useRef<DispatchTarget | null>(null);
   const dispatchQueueRef = useRef<Array<Omit<DispatchTarget, "expiresAt">>>([]);
+  const homeReturnAgentsRef = useRef<Set<AgentId>>(new Set());
   const processedTimelineLengthRef = useRef(0);
+  const processedTimelineFirstEventIdRef = useRef<string | null>(null);
   const currentTaskIdRef = useRef<string | null>(null);
   const elapsedRef = useRef(0);
 
@@ -278,17 +274,18 @@ function SceneContent({ runEpoch = 0, state }: LanternwoodSceneProps) {
       const agents = stateRef.current.agents;
       const timeline = stateRef.current.timeline;
       const taskId = stateRef.current.currentTask?.taskId ?? null;
+      const firstEventId = timeline[0]?.eventId ?? null;
+      const runEpochChanged = latestRunEpochRef.current !== processedRunEpochRef.current;
+      const timelineReplaced = runEpochChanged && timeline.length > 0 && firstEventId !== processedTimelineFirstEventIdRef.current;
 
-      if (
-        latestRunEpochRef.current !== processedRunEpochRef.current ||
-        taskId !== currentTaskIdRef.current ||
-        timeline.length < processedTimelineLengthRef.current
-      ) {
+      if (timeline.length < processedTimelineLengthRef.current || (runEpochChanged && (timeline.length === 0 || timelineReplaced))) {
         processedRunEpochRef.current = latestRunEpochRef.current;
         currentTaskIdRef.current = taskId;
         processedTimelineLengthRef.current = 0;
+        processedTimelineFirstEventIdRef.current = firstEventId;
         dispatchTargetRef.current = null;
         dispatchQueueRef.current = [];
+        homeReturnAgentsRef.current.clear();
         const positions = positionsRef.current;
         const statusClocks = statusClocksRef.current;
         if (positions && statusClocks) {
@@ -311,10 +308,14 @@ function SceneContent({ runEpoch = 0, state }: LanternwoodSceneProps) {
           bubble.expiresAt = 0;
         }
         clearDebugBubbleHistory();
+      } else if (latestRunEpochRef.current !== processedRunEpochRef.current || taskId !== currentTaskIdRef.current) {
+        processedRunEpochRef.current = latestRunEpochRef.current;
+        currentTaskIdRef.current = taskId;
+        processedTimelineFirstEventIdRef.current = firstEventId;
       }
 
       for (const event of timeline.slice(processedTimelineLengthRef.current)) {
-        const text = bubbleTextFromEvent(event);
+        const text = bubbleTextFromEvent(event, stateRef.current.tasks);
 
         if (event.type === "agent.prompted" && event.payload && text) {
           dispatchQueueRef.current.push({
@@ -324,11 +325,15 @@ function SceneContent({ runEpoch = 0, state }: LanternwoodSceneProps) {
         }
 
         if (text && event.type === "agent.reporting") {
+          if (event.agentId !== "luma") {
+            homeReturnAgentsRef.current.add(event.agentId);
+          }
           showBubble(bubblesRef.current, event.agentId, text, elapsedRef.current, 3.8);
         }
       }
 
       processedTimelineLengthRef.current = timeline.length;
+      processedTimelineFirstEventIdRef.current = firstEventId;
 
       if (!dispatchTargetRef.current || dispatchTargetRef.current.expiresAt <= elapsedRef.current) {
         const nextDispatch = dispatchQueueRef.current.shift();
@@ -377,13 +382,29 @@ function SceneContent({ runEpoch = 0, state }: LanternwoodSceneProps) {
 
         const current = positions[agent.definition.id];
         const dispatchTarget = dispatchTargetRef.current;
+        const home = getAgentScenePosition(agent.definition);
+        const shouldReturnHomeBeforeWork =
+          homeReturnAgentsRef.current.has(agent.definition.id) &&
+          agent.definition.id !== "luma" &&
+          agent.status !== "reporting" &&
+          agent.status !== "done" &&
+          agent.status !== "idle" &&
+          agent.status !== "failed";
+        const homeDistance = Math.hypot(home.x - current.x, home.y - current.y);
+
+        if (homeReturnAgentsRef.current.has(agent.definition.id) && agent.status !== "reporting" && homeDistance < 8) {
+          homeReturnAgentsRef.current.delete(agent.definition.id);
+        }
+
         const target =
           agent.definition.id === "luma" && dispatchTarget && dispatchTarget.expiresAt > elapsedRef.current
             ? {
                 x: getAgentWorkPosition(dispatchTarget.recipientAgentId).x - 76,
                 y: getAgentWorkPosition(dispatchTarget.recipientAgentId).y,
               }
-            : getAgentSceneTarget(agent.definition, agent.status);
+            : shouldReturnHomeBeforeWork
+              ? home
+              : getAgentSceneTarget(agent.definition, agent.status);
         const distance = Math.hypot(target.x - current.x, target.y - current.y);
         const isTravelling = distance > 2.5;
 
@@ -402,8 +423,9 @@ function SceneContent({ runEpoch = 0, state }: LanternwoodSceneProps) {
         bubble.container.visible = Boolean(ownerPosition && bubble.expiresAt > elapsedRef.current);
 
         if (ownerPosition && bubble.container.visible) {
-          bubble.container.x = Math.max(12, Math.min(SCENE_SIZE.width - 250, ownerPosition.x - 80));
-          bubble.container.y = Math.max(16, ownerPosition.y - 118);
+          const bubblePosition = getAgentBubblePosition(bubble.owner, ownerPosition);
+          bubble.container.x = bubblePosition.x;
+          bubble.container.y = bubblePosition.y;
           bubble.container.zIndex = ownerPosition.y + 1_000;
         }
       }
@@ -421,6 +443,7 @@ function SceneContent({ runEpoch = 0, state }: LanternwoodSceneProps) {
       positionsRef.current = null;
       statusClocksRef.current = null;
       processedTimelineLengthRef.current = 0;
+      processedTimelineFirstEventIdRef.current = null;
     };
   }, [app]);
 

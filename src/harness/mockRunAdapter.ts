@@ -1,6 +1,7 @@
 import type { AgentEvent } from "../events/types";
+import { AGENTS } from "../agents/registry";
 import { planRoute } from "./routePlanning";
-import type { RunAdapter, RunAdapterOptions } from "./runAdapter";
+import type { AgentJobRequest, RunAdapter, RunAdapterOptions, SynthesisTaskRequest } from "./runAdapter";
 import { createTaskId } from "./taskIds";
 
 type MockRunAdapterOptions = {
@@ -51,13 +52,9 @@ function event(
   } as AgentEvent;
 }
 
-const agentDisplayNames: Record<AgentEvent["agentId"], string> = {
-  argus: "Argus",
-  luma: "Luma",
-  neria: "Neria",
-  orion: "Orion",
-  quill: "Quill",
-};
+function agentDisplayName(agentId: AgentEvent["agentId"]) {
+  return AGENTS.find((agent) => agent.id === agentId)?.displayName ?? agentId;
+}
 
 function promptedEvent(taskId: string, index: number, recipientAgentId: AgentEvent["agentId"], prompt: string): AgentEvent {
   return event(taskId, index, "luma", "agent.prompted", `Luma prompts ${recipientAgentId}`, {
@@ -109,7 +106,41 @@ function reportEventsFor(taskId: string, startIndex: number, agentId: AgentEvent
     ],
   };
 
-  return reports[agentId] ?? [];
+  return (
+    reports[agentId] ?? [
+      promptedEvent(taskId, startIndex, agentId, `${agentDisplayName(agentId)}, return concise notes for this task.`),
+      event(taskId, startIndex + 1, agentId, "agent.working", `${agentDisplayName(agentId)} works through the request`),
+      event(taskId, startIndex + 2, agentId, "agent.reporting", `${agentDisplayName(agentId)} returns notes`, {
+        report: `${agentDisplayName(agentId)} note: handle the requested specialist work.`,
+        reportExcerpt: `${agentDisplayName(agentId)} note: handle the requested specialist work.`,
+        speechBubble: `${agentDisplayName(agentId)} note: handle the requested specialist work.`,
+      }),
+    ]
+  );
+}
+
+function specialistEventIndex(agentId: AgentEvent["agentId"]) {
+  return {
+    argus: 30,
+    luma: 70,
+    neria: 20,
+    orion: 10,
+    quill: 40,
+  }[agentId] ?? 50;
+}
+
+async function* yieldWithDelay(events: AgentEvent[], eventDelayMs: number, signal?: AbortSignal) {
+  for (const item of events) {
+    if (signal?.aborted) {
+      throw abortError();
+    }
+
+    if (eventDelayMs > 0) {
+      await wait(eventDelayMs, signal);
+    }
+
+    yield item;
+  }
 }
 
 export function createMockRunAdapter(options: MockRunAdapterOptions = {}): RunAdapter {
@@ -118,7 +149,7 @@ export function createMockRunAdapter(options: MockRunAdapterOptions = {}): RunAd
   return {
     async *startRun(input: string, runOptions: RunAdapterOptions = {}) {
       const taskId = runOptions.taskId ?? createTaskId(input);
-      const routePlan = planRoute(input);
+      const routePlan = planRoute(input, AGENTS);
       let index = 1;
       const events: AgentEvent[] = [
         event(taskId, 1, "luma", "task.created", input),
@@ -134,7 +165,7 @@ export function createMockRunAdapter(options: MockRunAdapterOptions = {}): RunAd
             index++,
             "luma",
             "agent.delegated",
-            `Luma selected: ${routePlan.selectedAgentIds.map((agentId) => agentDisplayNames[agentId]).join(", ")}`,
+            `Luma selected: ${routePlan.selectedAgentIds.map((agentId) => agentDisplayName(agentId)).join(", ")}`,
           ),
         );
       }
@@ -148,10 +179,10 @@ export function createMockRunAdapter(options: MockRunAdapterOptions = {}): RunAd
       events.push(event(taskId, index++, "luma", "approval.requested", "Luma raises the blue approval lantern"));
 
       for (const agentId of routePlan.selectedAgentIds) {
-        events.push(event(taskId, index++, agentId, "agent.done", `${agentDisplayNames[agentId]} returns to their alcove`));
+        events.push(event(taskId, index++, agentId, "agent.done", `${agentDisplayName(agentId)} returns to their alcove`));
       }
 
-      const selectedNames = routePlan.selectedAgentIds.map((agentId) => agentDisplayNames[agentId]).join(" and ");
+      const selectedNames = routePlan.selectedAgentIds.map((agentId) => agentDisplayName(agentId)).join(" and ");
       events.push(
         event(taskId, index++, "luma", "agent.done", "Luma places the final summary on the central desk", {
           finalOutput: selectedNames
@@ -160,17 +191,34 @@ export function createMockRunAdapter(options: MockRunAdapterOptions = {}): RunAd
         }),
       );
 
-      for (const item of events) {
-        if (runOptions.signal?.aborted) {
-          throw abortError();
-        }
+      yield* yieldWithDelay(events, eventDelayMs, runOptions.signal);
+    },
 
-        if (eventDelayMs > 0) {
-          await wait(eventDelayMs, runOptions.signal);
-        }
+    async *startAgentJob(job: AgentJobRequest, runOptions: RunAdapterOptions = {}) {
+      const events = reportEventsFor(job.taskId, specialistEventIndex(job.agentId), job.agentId).slice(1);
 
-        yield item;
+      yield* yieldWithDelay(events, eventDelayMs, runOptions.signal);
+    },
+
+    async *synthesizeTask(task: SynthesisTaskRequest, runOptions: RunAdapterOptions = {}) {
+      const events: AgentEvent[] = [];
+      let index = 80;
+      events.push(event(task.taskId, index++, "luma", "approval.requested", "Luma raises the blue approval lantern"));
+
+      for (const agentId of task.selectedAgentIds) {
+        events.push(event(task.taskId, index++, agentId, "agent.done", `${agentDisplayName(agentId)} returns to their alcove`));
       }
+
+      const selectedNames = task.selectedAgentIds.map((agentId) => agentDisplayName(agentId)).join(" and ");
+      events.push(
+        event(task.taskId, index++, "luma", "agent.done", "Luma places the final summary on the central desk", {
+          finalOutput: selectedNames
+            ? `Here is the focused plan synthesized from ${selectedNames}.`
+            : "This request is simple enough for Luma to answer directly without specialist routing.",
+        }),
+      );
+
+      yield* yieldWithDelay(events, eventDelayMs, runOptions.signal);
     },
   };
 }

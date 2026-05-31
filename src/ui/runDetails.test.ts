@@ -9,6 +9,13 @@ const baseEvent = {
 
 function stateWith(events: AgentEvent[], finalOutput: string | null = null): RunState {
   return {
+    agentQueues: {
+      argus: [],
+      luma: [],
+      neria: [],
+      orion: [],
+      quill: [],
+    },
     agents: {
       argus: { definition: {} as never, lastMessage: "", status: "idle" },
       luma: { definition: {} as never, lastMessage: "", status: "idle" },
@@ -18,6 +25,18 @@ function stateWith(events: AgentEvent[], finalOutput: string | null = null): Run
     },
     currentTask: { prompt: "Prompt", taskId: "task-1" },
     finalOutput,
+    finalOutputs: {},
+    tasks: [
+      {
+        createdAt: "2026-05-26T00:00:00.000Z",
+        finalOutput: null,
+        prompt: "Prompt",
+        selectedAgentIds: ["orion"],
+        skippedAgentIds: ["neria", "quill", "argus"],
+        status: finalOutput ? "done" : "running",
+        taskId: "task-1",
+      },
+    ],
     timeline: events,
   };
 }
@@ -116,9 +135,9 @@ describe("run details", () => {
     expect(details.rawCodex).toContain("[redacted-path]");
     expect(details.rawCodexByAgent[0]).toMatchObject({ agentId: "orion", rawResponse: expect.stringContaining("[redacted-path]") });
     expect(details.runLog).toEqual([
-      "Routing Decision: selected Orion; skipped Neria, Quill, Argus; confidence high; reason Needs research only",
-      "Luma -> Orion: Research this",
-      "Orion report: Research report",
+      "T1 · Routing Decision: selected Orion; skipped Neria, Quill, Argus; confidence high; reason Needs research only",
+      "T1 · Luma -> Orion: Research this",
+      "T1 · Orion report: Research report",
     ]);
   });
 

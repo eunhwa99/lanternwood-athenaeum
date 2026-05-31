@@ -7,14 +7,15 @@
     "dev": "vite --host 127.0.0.1 --strictPort",
     "dev:codex": "VITE_RUN_ADAPTER=codex vite --host 127.0.0.1 --strictPort",
     "dev:codex-api": "tsx server/index.ts",
-    "dev:all": "sh -c 'token=\"lanternwood-$$-$(date +%s)\"; LANTERNWOOD_CODEX_HEALTH_TOKEN=$token npm run dev:codex-api & api=$!; if ! LANTERNWOOD_CODEX_HEALTH_TOKEN=$token tsx server/waitForCodexHealth.ts || ! kill -0 $api 2>/dev/null; then kill $api 2>/dev/null || true; wait $api 2>/dev/null || true; exit 1; fi; npm run dev:codex; status=$?; kill $api 2>/dev/null || true; exit $status'",
+    "dev:all": "sh -c 'token=\"lanternwood-$$-$(date +%s)\"; LANTERNWOOD_CODEX_HEALTH_TOKEN=$token npm run dev:codex-api & api=$!; if ! LANTERNWOOD_CODEX_HEALTH_TOKEN=$token tsx server/waitForCodexHealth.ts || ! kill -0 $api 2>/dev/null; then kill $api 2>/dev/null || true; wait $api 2>/dev/null || true; exit 1; fi; VITE_LANTERNWOOD_CODEX_REQUEST_TOKEN=$token npm run dev:codex; status=$?; kill $api 2>/dev/null || true; exit $status'",
     "build": "npm run typecheck && vite build",
     "e2e": "playwright test",
     "e2e:update": "playwright test --update-snapshots",
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.e2e.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.e2e.json",
+    "verify": "npm run typecheck && npm test && npm run lint && npm run build && npm run e2e"
   },
   "dependencies": {
     "@pixi/react": "^8.0.3",

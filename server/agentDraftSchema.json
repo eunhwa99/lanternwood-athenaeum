@@ -1,0 +1,46 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "color",
+    "displayName",
+    "id",
+    "persona",
+    "promptInstruction",
+    "routingKeywords",
+    "routingReason",
+    "worldRole"
+  ],
+  "properties": {
+    "color": {
+      "type": "string",
+      "pattern": "^#[0-9a-fA-F]{6}$"
+    },
+    "displayName": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "persona": {
+      "type": "string"
+    },
+    "promptInstruction": {
+      "type": "string"
+    },
+    "routingKeywords": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "routingReason": {
+      "type": "string"
+    },
+    "worldRole": {
+      "type": "string"
+    }
+  }
+}

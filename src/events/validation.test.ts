@@ -58,6 +58,43 @@ describe("agent event validation", () => {
     ).toBe(true);
   });
 
+  it("accepts dynamically authored specialist ids in prompted, reporting, and route events", () => {
+    expect(
+      isAgentEvent({
+        ...baseEvent,
+        agentId: "luma",
+        payload: {
+          prompt: "Build Scribe, inspect this task",
+          promptExcerpt: "Build Scribe, inspect this task",
+          recipientAgentId: "build-scribe",
+          senderAgentId: "luma",
+          speechBubble: "Build Scribe, inspect this task",
+        },
+        type: "agent.prompted",
+      }),
+    ).toBe(true);
+    expect(
+      isAgentEvent({
+        ...baseEvent,
+        agentId: "build-scribe",
+        payload: { report: "Build notes" },
+      }),
+    ).toBe(true);
+    expect(
+      isAgentEvent({
+        ...baseEvent,
+        agentId: "luma",
+        payload: {
+          confidence: "medium",
+          rationale: "Custom implementation route",
+          selectedAgentIds: ["build-scribe"],
+          skippedAgentIds: ["orion"],
+        },
+        type: "route.planned",
+      }),
+    ).toBe(true);
+  });
+
   it("rejects prompted events from non-Luma senders or to non-specialist recipients", () => {
     const promptedEvent = {
       ...baseEvent,
@@ -131,7 +168,7 @@ describe("agent event validation", () => {
     ).toBe(false);
   });
 
-  it("rejects route planned payloads with unknown or non-specialist agent ids", () => {
+  it("rejects route planned payloads with non-specialist agent ids", () => {
     expect(
       isAgentEvent({
         ...baseEvent,
@@ -147,7 +184,7 @@ describe("agent event validation", () => {
     ).toBe(false);
   });
 
-  it("rejects route planned payloads with duplicate, overlapping, or incomplete route sets", () => {
+  it("rejects route planned payloads with duplicate or overlapping route sets", () => {
     const route = {
       ...baseEvent,
       agentId: "luma",
@@ -162,6 +199,5 @@ describe("agent event validation", () => {
 
     expect(isAgentEvent({ ...route, payload: { ...route.payload, selectedAgentIds: ["orion", "orion"] } })).toBe(false);
     expect(isAgentEvent({ ...route, payload: { ...route.payload, skippedAgentIds: ["orion", "neria", "quill", "argus"] } })).toBe(false);
-    expect(isAgentEvent({ ...route, payload: { ...route.payload, skippedAgentIds: ["neria", "quill"] } })).toBe(false);
   });
 });

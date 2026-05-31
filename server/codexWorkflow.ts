@@ -4,48 +4,49 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { AgentDefinition } from "../src/agents/types";
 import type { AgentEvent, PreviousRunContext } from "../src/events/types";
 import { planRoute } from "../src/harness/routePlanning";
 import { createTaskId } from "../src/harness/taskIds";
 import { createDefaultCoordinatorPolicy, reviewCoordinatorPermissions, type CoordinatorPolicy } from "./coordinatorPolicy";
 import { loadGlobalAgents, type GlobalAgents } from "./globalAgents";
+import { loadAgentDefinitions } from "./agentCatalog";
 
-type SpecialistId = "argus" | "neria" | "orion" | "quill";
+type SpecialistId = string;
+type SpecialistDefinition = AgentDefinition;
 type SpecialistReports = Partial<Record<SpecialistId, string>>;
-type CodexExecutionProgress = {
+export type CodexExecutionProgress = {
   rawChunk?: string;
   stderrChunk?: string;
 };
-type CodexProgressHandler = (progress: CodexExecutionProgress) => void;
+export type CodexProgressHandler = (progress: CodexExecutionProgress) => void;
 type CodexExecutionOptions = {
+  agents?: AgentDefinition[];
   coordinatorPolicy?: CoordinatorPolicy;
   globalAgents?: GlobalAgents;
   previousRun?: PreviousRunContext;
+  sandboxMode?: "read-only" | "workspace-write";
   signal?: AbortSignal;
   specialistReports?: SpecialistReports;
   taskId?: string;
+  workspacePath?: string;
 };
 
-const REQUIRED_SPECIALISTS = [
-  { displayName: "Orion", id: "orion" },
-  { displayName: "Neria", id: "neria" },
-  { displayName: "Quill", id: "quill" },
-  { displayName: "Argus", id: "argus" },
-] as const;
+function workflowSpecialists(agents: AgentDefinition[]) {
+  return agents.filter((agent) => agent.id !== "luma");
+}
 
-const reportingMessages: Record<(typeof REQUIRED_SPECIALISTS)[number]["id"], string> = {
-  argus: "Argus returns review notes",
-  neria: "Neria returns memory context",
-  orion: "Orion returns research findings",
-  quill: "Quill returns a draft",
-};
+function reportingMessage(specialist: SpecialistDefinition) {
+  return `${specialist.displayName} returns ${specialist.systemRole === "ReviewAgent" ? "review notes" : "specialist notes"}`;
+}
 
-const dispatchPrompts: Record<(typeof REQUIRED_SPECIALISTS)[number]["id"], string> = {
-  argus: "Argus, review the plan for risk, scope, and completion criteria.",
-  neria: "Neria, identify stable constraints and memory-like context without inventing private memory.",
-  orion: "Orion, identify research context, assumptions, uncertainty, and source-checking needs.",
-  quill: "Quill, draft the useful structure and wording for the final response.",
-};
+function sentenceCaseAfterName(instruction: string) {
+  return instruction.charAt(0).toLocaleLowerCase() + instruction.slice(1);
+}
+
+function dispatchPrompt(specialist: SpecialistDefinition) {
+  return `${specialist.displayName}, ${sentenceCaseAfterName(specialist.promptInstruction)}`;
+}
 
 export type CodexExecutionResult = {
   finalOutput: unknown;
@@ -69,7 +70,7 @@ export type CodexSynthesisResult = {
 };
 
 export type CodexSpecialistExecutor = (
-  specialist: (typeof REQUIRED_SPECIALISTS)[number],
+  specialist: SpecialistDefinition,
   input: string,
   onProgress?: CodexProgressHandler,
   options?: CodexExecutionOptions,
@@ -105,9 +106,11 @@ type CodexCliExecutorOptions = {
 
 const schemaPath = join(dirname(fileURLToPath(import.meta.url)), "codexOutputSchema.json");
 
-type RunCodexCommandOptions = {
+export type RunCodexCommandOptions = {
   outputSchemaPath?: string;
+  sandboxMode?: "read-only" | "workspace-write";
   signal?: AbortSignal;
+  workspacePath?: string;
 };
 
 export function readTopLevelModelFromCodexConfig(config: string) {
@@ -216,6 +219,29 @@ function event(
   } as AgentEvent;
 }
 
+function normalizeWorkflowTaskId(taskId: string, input = taskId) {
+  return /^task-[A-Za-z0-9-]+$/.test(taskId) && taskId.length <= 48 ? taskId : createTaskId(input);
+}
+
+export function createCodexServerFailureEvent(taskId: string, error: unknown): AgentEvent {
+  const normalizedTaskId = normalizeWorkflowTaskId(taskId);
+
+  return {
+    agentId: "luma",
+    eventId: `${normalizedTaskId}-server-error`,
+    message: error instanceof Error ? error.message : "Codex workflow stream failed",
+    payload: {
+      backend: "connected",
+      cliCommand: "codex exec",
+      codexStatus: "failed",
+      runMode: "codex",
+    },
+    taskId: normalizedTaskId,
+    timestamp: new Date().toISOString(),
+    type: "agent.failed",
+  } as AgentEvent;
+}
+
 function excerpt(value: string, maxLength = 180) {
   return value.length > maxLength ? `${value.slice(0, maxLength - 3)}...` : value;
 }
@@ -223,9 +249,9 @@ function excerpt(value: string, maxLength = 180) {
 function promptedEvent(
   taskId: string,
   index: number,
-  specialist: (typeof REQUIRED_SPECIALISTS)[number],
+  specialist: SpecialistDefinition,
 ): AgentEvent {
-  const prompt = dispatchPrompts[specialist.id];
+  const prompt = dispatchPrompt(specialist);
 
   return event(taskId, index, "luma", "agent.prompted", `Luma prompts ${specialist.displayName}`, {
     prompt,
@@ -236,10 +262,50 @@ function promptedEvent(
   });
 }
 
-function agentNames(agentIds: Array<(typeof REQUIRED_SPECIALISTS)[number]["id"]>) {
+function agentNames(agentIds: string[], agents: AgentDefinition[]) {
   return agentIds
-    .map((agentId) => REQUIRED_SPECIALISTS.find((specialist) => specialist.id === agentId)?.displayName ?? agentId)
+    .map((agentId) => agents.find((agent) => agent.id === agentId)?.displayName ?? agentId)
     .join(", ");
+}
+
+function coordinatorPolicyFor(options: CodexExecutionOptions, globalAgents: GlobalAgents) {
+  return options.coordinatorPolicy ?? globalAgents.automationPolicy ?? createDefaultCoordinatorPolicy(homedir());
+}
+
+function createPermissionReviewEvents(
+  input: string,
+  taskId: string,
+  startIndex: number,
+  policy: CoordinatorPolicy,
+  codexDiagnostics: Record<string, string>,
+) {
+  const events: AgentEvent[] = [];
+  let index = startIndex;
+
+  for (const review of reviewCoordinatorPermissions(input, policy)) {
+    events.push(event(taskId, index++, "luma", "permission.reviewed", `Coordinator ${review.decision}s ${review.action}`, review));
+
+    if (review.decision === "deny" || review.decision === "escalate") {
+      events.push(event(taskId, index++, "luma", "agent.failed", `Coordinator ${review.decision}ed ${review.action}: ${review.reason}`, {
+        ...codexDiagnostics,
+        codexStatus: review.decision,
+      }));
+      return { blocked: true, events, nextIndex: index };
+    }
+  }
+
+  return { blocked: false, events, nextIndex: index };
+}
+
+function queuedSpecialistEventStartIndex(agentId: SpecialistId) {
+  const baseIndexes: Record<string, number> = {
+    argus: 301,
+    neria: 201,
+    orion: 101,
+    quill: 401,
+  };
+
+  return baseIndexes[agentId] ?? 501 + (agentId.split("").reduce((sum, character) => sum + character.charCodeAt(0), 0) % 200);
 }
 
 function messageFromError(error: unknown): string {
@@ -270,10 +336,16 @@ function createLinkedAbortController(signal?: AbortSignal) {
   return controller;
 }
 
-function buildCodexPrompt(input: string) {
-  const routePlan = planRoute(input);
-  const selectedAgents = agentNames(routePlan.selectedAgentIds);
-  const skippedAgents = agentNames(routePlan.skippedAgentIds);
+function buildCodexPrompt(input: string, agents: AgentDefinition[]) {
+  const routePlan = planRoute(input, agents);
+  const selectedAgents = agentNames(routePlan.selectedAgentIds, agents);
+  const skippedAgents = agentNames(routePlan.skippedAgentIds, agents);
+  const roleLines = workflowSpecialists(agents)
+    .map((agent) => `- ${agent.displayName}: ${agent.promptInstruction}`)
+    .join("\n");
+  const reportSchema = workflowSpecialists(agents)
+    .map((agent) => `  "${agent.id}": "... only if selected ...",`)
+    .join("\n");
 
   return `You are Luma, the Lanternwood Athenaeum orchestrator.
 
@@ -284,17 +356,11 @@ First follow this routing decision:
 - Reason: ${routePlan.rationale}
 
 Only use the selected internal roles and synthesize the result:
-- Orion: research context, assumptions, and uncertainty.
-- Neria: memory/preferences context and stable constraints.
-- Quill: draft structure or prose.
-- Argus: review risks, gaps, and readiness.
+${roleLines || "- No specialist roles selected."}
 
 Return only one JSON object. Include "finalOutput" and include non-empty specialist fields only for selected agents:
 {
-  "orion": "... only if selected ...",
-  "neria": "... only if selected ...",
-  "quill": "... only if selected ...",
-  "argus": "... only if selected ...",
+${reportSchema}
   "finalOutput": "..."
 }
 
@@ -322,8 +388,8 @@ function quoteUntrusted(value: string) {
   return value.replace(/```/g, "`\u200b``");
 }
 
-function specialistReportsContext(reports: SpecialistReports) {
-  const selectedReports = REQUIRED_SPECIALISTS.filter((specialist) => reports[specialist.id]?.trim()).map(
+function specialistReportsContext(reports: SpecialistReports, agents: AgentDefinition[]) {
+  const selectedReports = workflowSpecialists(agents).filter((specialist) => reports[specialist.id]?.trim()).map(
     (specialist) => `${specialist.displayName} output:\n${quoteUntrusted(reports[specialist.id]!)}`,
   );
 
@@ -349,22 +415,13 @@ function optionalContext(options?: CodexExecutionOptions) {
   return [globalAgentsContext(options?.globalAgents), previousRunContext(options?.previousRun)].filter(Boolean).join("\n\n");
 }
 
-function buildSpecialistPrompt(specialist: (typeof REQUIRED_SPECIALISTS)[number], input: string, options?: CodexExecutionOptions) {
-  const roleInstructions: Record<SpecialistId, string> = {
-    argus:
-      "Review the likely answer for risks, missing evidence, unsafe assumptions, and readiness. Return concise review notes only.",
-    neria:
-      "Extract stable user preferences, project constraints, and relevant memory-like context from the request only. Do not invent private memory. Return concise context notes only.",
-    orion:
-      "Identify research context, assumptions, uncertainty, and source-checking needs. Return concise research findings only.",
-    quill:
-      "Draft the useful structure, wording, or artifact shape that should appear in the final response. Return concise draft notes only.",
-  };
-
+function buildSpecialistPrompt(specialist: SpecialistDefinition, input: string, options?: CodexExecutionOptions) {
   const context = optionalContext(options);
-  const reviewContext = specialist.id === "argus" ? specialistReportsContext(options?.specialistReports ?? {}) : "";
+  const agents = options?.agents ?? [specialist];
+  const reviewContext =
+    specialist.systemRole === "ReviewAgent" ? specialistReportsContext(options?.specialistReports ?? {}, agents) : "";
 
-  return `You are ${specialist.displayName}, ${roleInstructions[specialist.id]}.
+  return `You are ${specialist.displayName}, ${specialist.promptInstruction}.
 
 You are one specialist in The Lanternwood Athenaeum. Luma will synthesize your output with other specialists.
 ${context ? `\n${context}\n` : ""}
@@ -376,6 +433,7 @@ ${input}`;
 
 function buildSynthesisPrompt(input: string, reports: SpecialistReports, options?: CodexExecutionOptions) {
   const context = optionalContext(options);
+  const agents = options?.agents ?? [];
 
   return `You are Luma, the Lanternwood Athenaeum orchestrator.
 
@@ -385,7 +443,7 @@ ${context ? `\n${context}\n` : ""}
 User request:
 ${input}
 
-${specialistReportsContext(reports)}`;
+${specialistReportsContext(reports, agents)}`;
 }
 
 function normalizeResult(value: unknown): CodexExecutionResult {
@@ -414,10 +472,10 @@ function parseCodexJsonOutput(output: string): CodexExecutionResult {
   }
 }
 
-async function runCodexCommand(
+export async function runCodexCommand(
   prompt: string,
   onProgress?: CodexProgressHandler,
-  { outputSchemaPath, signal }: RunCodexCommandOptions = {},
+  { outputSchemaPath, sandboxMode = "read-only", signal, workspacePath }: RunCodexCommandOptions = {},
 ): Promise<string> {
   const tempDirectory = await mkdtemp(join(tmpdir(), "lanternwood-codex-"));
   const outputPath = join(tempDirectory, "last-message.json");
@@ -435,9 +493,9 @@ async function runCodexCommand(
         "--json",
         ...(process.env.LANTERNWOOD_CODEX_MODEL?.trim() ? ["--model", process.env.LANTERNWOOD_CODEX_MODEL.trim()] : []),
         "--sandbox",
-        "read-only",
+        sandboxMode,
         "--cd",
-        process.cwd(),
+        workspacePath ?? process.cwd(),
         ...(outputSchemaPath ? ["--output-schema", outputSchemaPath] : []),
         "--output-last-message",
         outputPath,
@@ -557,7 +615,8 @@ async function runCodexCommand(
 
 export function createCodexCliExecutor({ runCommand = runCodexCommand }: CodexCliExecutorOptions = {}): CodexExecutor {
   return async (input: string, onProgress?: CodexProgressHandler) => {
-    const output = await runCommand(buildCodexPrompt(input), onProgress, { outputSchemaPath: schemaPath });
+    const agents = await loadAgentDefinitions();
+    const output = await runCommand(buildCodexPrompt(input, agents), onProgress, { outputSchemaPath: schemaPath });
 
     try {
       return {
@@ -576,7 +635,11 @@ export function createCodexCliWorkflow({
 }: CodexCliExecutorOptions = {}): CodexWorkflowExecutors {
   return {
     async runSpecialist(specialist, input, onProgress, options) {
-      const output = await runCommand(buildSpecialistPrompt(specialist, input, options), onProgress, { signal: options?.signal });
+      const output = await runCommand(buildSpecialistPrompt(specialist, input, options), onProgress, {
+        sandboxMode: options?.sandboxMode,
+        signal: options?.signal,
+        workspacePath: options?.workspacePath,
+      });
       const report = output.trim();
 
       if (!report) {
@@ -590,7 +653,11 @@ export function createCodexCliWorkflow({
       };
     },
     async synthesize(input, reports, onProgress, options) {
-      const output = await runCommand(buildSynthesisPrompt(input, reports, options), onProgress, { signal: options?.signal });
+      const output = await runCommand(buildSynthesisPrompt(input, reports, options), onProgress, {
+        sandboxMode: options?.sandboxMode,
+        signal: options?.signal,
+        workspacePath: options?.workspacePath,
+      });
       const finalOutput = output.trim();
 
       if (!finalOutput) {
@@ -616,7 +683,7 @@ function requireFinalOutput(value: unknown) {
   return finalOutput;
 }
 
-function assertSelectedSpecialistsReported(reports: SpecialistReports, selectedSpecialists: Array<(typeof REQUIRED_SPECIALISTS)[number]>) {
+function assertSelectedSpecialistsReported(reports: SpecialistReports, selectedSpecialists: SpecialistDefinition[]) {
   const missing = selectedSpecialists.filter((specialist) => !reports[specialist.id]?.trim()).map((specialist) => specialist.displayName);
 
   if (missing.length > 0) {
@@ -634,12 +701,12 @@ type CodexQueueItem =
   | {
       kind: "specialistResult";
       result: CodexSpecialistResult;
-      specialist: (typeof REQUIRED_SPECIALISTS)[number];
+      specialist: SpecialistDefinition;
     }
   | {
       error: unknown;
       kind: "specialistError";
-      specialist: (typeof REQUIRED_SPECIALISTS)[number];
+      specialist: SpecialistDefinition;
     };
 
 function createAsyncQueue<T>() {
@@ -688,17 +755,19 @@ export async function* createCodexEvents(
   options: CodexExecutionOptions = {},
 ): AsyncIterable<AgentEvent> {
   const globalAgents = options.globalAgents ?? (await loadGlobalAgents());
-  const coordinatorPolicy = options.coordinatorPolicy ?? globalAgents.automationPolicy ?? createDefaultCoordinatorPolicy(homedir());
-  const taskId = options.taskId ?? createTaskId(input);
+  const agents = options.agents ?? (await loadAgentDefinitions());
+  const specialists = workflowSpecialists(agents);
+  const coordinatorPolicy = coordinatorPolicyFor(options, globalAgents);
+  const taskId = normalizeWorkflowTaskId(options.taskId ?? createTaskId(input), input);
   let index = 1;
   const reportedSpecialists = new Set<SpecialistId>();
   const failedSpecialists = new Set<SpecialistId>();
-  const routePlan = planRoute(input);
-  const selectedSpecialists = REQUIRED_SPECIALISTS.filter((specialist) =>
+  const routePlan = planRoute(input, agents);
+  const selectedSpecialists = specialists.filter((specialist) =>
     routePlan.selectedAgentIds.includes(specialist.id),
   );
-  const reviewSpecialist = selectedSpecialists.find((specialist) => specialist.id === "argus");
-  const primarySpecialists = selectedSpecialists.filter((specialist) => specialist.id !== "argus");
+  const reviewSpecialist = selectedSpecialists.find((specialist) => specialist.systemRole === "ReviewAgent");
+  const primarySpecialists = selectedSpecialists.filter((specialist) => specialist.id !== reviewSpecialist?.id);
   const codexDiagnostics = {
     backend: "connected",
     cliCommand: "codex exec",
@@ -732,7 +801,7 @@ export async function* createCodexEvents(
       index++,
       "luma",
       "agent.delegated",
-      `Luma routes the work to ${agentNames(selectedSpecialists.map((specialist) => specialist.id))} through Codex`,
+      `Luma routes the work to ${agentNames(selectedSpecialists.map((specialist) => specialist.id), agents)} through Codex`,
       {
         ...codexDiagnostics,
         codexStatus: "calling",
@@ -770,7 +839,14 @@ export async function* createCodexEvents(
             message: `${specialist.displayName} Codex CLI is streaming output`,
             progress,
           });
-        }, { globalAgents, previousRun: options.previousRun, signal: specialistAbortController.signal })
+        }, {
+          agents,
+          globalAgents,
+          previousRun: options.previousRun,
+          sandboxMode: options.sandboxMode,
+          signal: specialistAbortController.signal,
+          workspacePath: options.workspacePath,
+        })
         .then((result) => {
           queue.push({ kind: "specialistResult", result, specialist });
         })
@@ -802,7 +878,7 @@ export async function* createCodexEvents(
       }
 
       if (item.kind === "progress") {
-        yield event(taskId, index++, item.agentId, item.agentId === "argus" ? "agent.reviewing" : "agent.working", item.message, {
+        yield event(taskId, index++, item.agentId, item.agentId === reviewSpecialist?.id ? "agent.reviewing" : "agent.working", item.message, {
           ...codexDiagnostics,
           codexStatus: "streaming",
           progress: `${item.message}.`,
@@ -837,7 +913,7 @@ export async function* createCodexEvents(
       const report = result?.report.trim();
 
       if (result && report) {
-        yield event(taskId, index++, specialist.id, "agent.reporting", reportingMessages[specialist.id], {
+        yield event(taskId, index++, specialist.id, "agent.reporting", reportingMessage(specialist), {
           ...codexDiagnostics,
           codexStatus: "completed",
           model: result.model ?? getCodexModelLabel(),
@@ -872,7 +948,15 @@ export async function* createCodexEvents(
       const reviewExecution = workflow
         .runSpecialist(reviewSpecialist, input, (progress) => {
           reviewQueue.push(progress);
-        }, { globalAgents, previousRun: options.previousRun, signal: options.signal, specialistReports: reports })
+        }, {
+          agents,
+          globalAgents,
+          previousRun: options.previousRun,
+          sandboxMode: options.sandboxMode,
+          signal: options.signal,
+          specialistReports: reports,
+          workspacePath: options.workspacePath,
+        })
         .then(
           (value) => ({ type: "result" as const, value }),
           (error: unknown) => ({ error, type: "error" as const }),
@@ -918,7 +1002,7 @@ export async function* createCodexEvents(
 
       if (reviewReport) {
         reports[reviewSpecialist.id] = reviewReport;
-        yield event(taskId, index++, reviewSpecialist.id, "agent.reporting", reportingMessages[reviewSpecialist.id], {
+        yield event(taskId, index++, reviewSpecialist.id, "agent.reporting", reportingMessage(reviewSpecialist), {
           ...codexDiagnostics,
           codexStatus: "completed",
           model: reviewOutcome.value.model ?? getCodexModelLabel(),
@@ -942,7 +1026,14 @@ export async function* createCodexEvents(
     const synthesisExecution = workflow
       .synthesize(input, reports, (progress) => {
         synthesisQueue.push(progress);
-      }, { globalAgents, previousRun: options.previousRun, signal: options.signal })
+      }, {
+        agents,
+        globalAgents,
+        previousRun: options.previousRun,
+        sandboxMode: options.sandboxMode,
+        signal: options.signal,
+        workspacePath: options.workspacePath,
+      })
       .then(
         (value) => ({ type: "result" as const, value }),
         (error: unknown) => ({ error, type: "error" as const }),
@@ -1005,7 +1096,7 @@ export async function* createCodexEvents(
       const report = reports[specialist.id]?.trim();
 
       if (report && !reportedSpecialists.has(specialist.id)) {
-        yield event(taskId, index++, specialist.id, "agent.reporting", reportingMessages[specialist.id], {
+        yield event(taskId, index++, specialist.id, "agent.reporting", reportingMessage(specialist), {
           report,
           reportExcerpt: excerpt(report),
           speechBubble: excerpt(report, 96),
@@ -1028,6 +1119,333 @@ export async function* createCodexEvents(
   }
 }
 
+export type CodexAgentJobInput = {
+  agentId: SpecialistId;
+  input: string;
+  selectedAgentIds?: SpecialistId[];
+  specialistReports?: SpecialistReports;
+  taskId: string;
+};
+
+export type CodexSynthesisInput = {
+  input: string;
+  reports: SpecialistReports;
+  selectedAgentIds?: SpecialistId[];
+  taskId: string;
+};
+
+function sameSpecialistRoute(left: SpecialistId[], right: SpecialistId[]) {
+  return left.length === right.length && left.every((agentId) => right.includes(agentId));
+}
+
+function unselectedReportNames(reports: SpecialistReports, selectedAgentIds: SpecialistId[], agents: AgentDefinition[]) {
+  const selected = new Set(selectedAgentIds);
+
+  return workflowSpecialists(agents).filter((specialist) => reports[specialist.id]?.trim() && !selected.has(specialist.id)).map(
+    (specialist) => specialist.displayName,
+  );
+}
+
+function selectedReports(reports: SpecialistReports, selectedAgentIds: SpecialistId[]) {
+  return Object.fromEntries(
+    selectedAgentIds
+      .map((agentId) => [agentId, reports[agentId]?.trim()])
+      .filter((entry): entry is [SpecialistId, string] => typeof entry[1] === "string" && entry[1].length > 0),
+  ) as SpecialistReports;
+}
+
+export async function* createCodexAgentJobEvents(
+  job: CodexAgentJobInput,
+  workflow: CodexWorkflowExecutors = createCodexCliWorkflow(),
+  options: CodexExecutionOptions = {},
+): AsyncIterable<AgentEvent> {
+  const globalAgents = options.globalAgents ?? (await loadGlobalAgents());
+  const agents = options.agents ?? (await loadAgentDefinitions());
+  const specialists = workflowSpecialists(agents);
+  const coordinatorPolicy = coordinatorPolicyFor(options, globalAgents);
+  const taskId = normalizeWorkflowTaskId(job.taskId, job.input);
+  const expectedRoute = planRoute(job.input, agents);
+  const requestedAgentIds = job.selectedAgentIds ?? expectedRoute.selectedAgentIds;
+  const specialist = specialists.find((candidate) => candidate.id === job.agentId);
+  const codexDiagnostics = {
+    backend: "connected",
+    cliCommand: "codex exec",
+    model: getCodexModelLabel(),
+    runMode: "codex",
+  };
+  let index = queuedSpecialistEventStartIndex(job.agentId);
+
+  const permissionReviews = createPermissionReviewEvents(job.input, taskId, index, coordinatorPolicy, codexDiagnostics);
+  index = permissionReviews.nextIndex;
+  for (const reviewEvent of permissionReviews.events) {
+    yield reviewEvent;
+  }
+
+  if (permissionReviews.blocked) {
+    return;
+  }
+
+  if (!specialist) {
+    yield event(taskId, index++, "luma", "agent.failed", `Unknown specialist: ${job.agentId}`, {
+      ...codexDiagnostics,
+      codexStatus: "failed",
+    });
+    return;
+  }
+
+  if (!sameSpecialistRoute(requestedAgentIds, expectedRoute.selectedAgentIds) || !requestedAgentIds.includes(job.agentId)) {
+    yield event(taskId, index++, "luma", "agent.failed", "Queued specialist is not selected for the requested task.", {
+      ...codexDiagnostics,
+      codexStatus: "failed",
+    });
+    return;
+  }
+
+  yield event(
+    taskId,
+    index++,
+    specialist.id,
+    specialist.systemRole === "ReviewAgent" ? "agent.reviewing" : "agent.working",
+    `${specialist.displayName} starts a queued Codex route`,
+    {
+      ...codexDiagnostics,
+      codexStatus: "calling",
+      progress: `${specialist.displayName} queued Codex route started.`,
+    },
+  );
+
+  const progressQueue = createAsyncQueue<CodexExecutionProgress>();
+  const execution = workflow
+    .runSpecialist(
+      specialist,
+      job.input,
+      (progress) => {
+        progressQueue.push(progress);
+      },
+      {
+        agents,
+        globalAgents,
+        previousRun: options.previousRun,
+        sandboxMode: options.sandboxMode,
+        signal: options.signal,
+        specialistReports: job.specialistReports ?? options.specialistReports,
+        workspacePath: options.workspacePath,
+      },
+    )
+    .then(
+      (value) => ({ type: "result" as const, value }),
+      (error: unknown) => ({ error, type: "error" as const }),
+    )
+    .finally(() => {
+      progressQueue.close();
+    });
+
+  while (true) {
+    const progress = await progressQueue.next();
+
+    if (options.signal?.aborted) {
+      await execution;
+      throw abortError();
+    }
+
+    if (!progress) {
+      break;
+    }
+
+    yield event(
+      taskId,
+      index++,
+      specialist.id,
+      specialist.systemRole === "ReviewAgent" ? "agent.reviewing" : "agent.working",
+      `${specialist.displayName} Codex CLI is streaming output`,
+      {
+        ...codexDiagnostics,
+        codexStatus: "streaming",
+        progress: `${specialist.displayName} Codex CLI is streaming output.`,
+        rawChunk: progress.rawChunk,
+        stderrChunk: progress.stderrChunk,
+      },
+    );
+  }
+
+  const outcome = await execution;
+
+  if (outcome.type === "error") {
+    yield event(taskId, index++, specialist.id, "agent.failed", messageFromError(outcome.error), {
+      ...codexDiagnostics,
+      codexStatus: "failed",
+      rawResponse: rawResponseFromError(outcome.error),
+    });
+    return;
+  }
+
+  const report = outcome.value.report.trim();
+
+  if (!report) {
+    yield event(taskId, index++, specialist.id, "agent.failed", `${specialist.displayName} did not return output.`, {
+      ...codexDiagnostics,
+      codexStatus: "failed",
+      rawResponse: outcome.value.rawResponse,
+    });
+    return;
+  }
+
+  yield event(taskId, index++, specialist.id, "agent.reporting", reportingMessage(specialist), {
+    ...codexDiagnostics,
+    codexStatus: "completed",
+    model: outcome.value.model ?? getCodexModelLabel(),
+    rawResponse: outcome.value.rawResponse,
+    report,
+    reportExcerpt: excerpt(report),
+    speechBubble: excerpt(report, 96),
+  });
+}
+
+export async function* createCodexSynthesisEvents(
+  task: CodexSynthesisInput,
+  workflow: CodexWorkflowExecutors = createCodexCliWorkflow(),
+  options: CodexExecutionOptions = {},
+): AsyncIterable<AgentEvent> {
+  const globalAgents = options.globalAgents ?? (await loadGlobalAgents());
+  const agents = options.agents ?? (await loadAgentDefinitions());
+  const specialists = workflowSpecialists(agents);
+  const coordinatorPolicy = coordinatorPolicyFor(options, globalAgents);
+  const taskId = normalizeWorkflowTaskId(task.taskId, task.input);
+  const expectedRoute = planRoute(task.input, agents);
+  const requestedAgentIds = task.selectedAgentIds ?? [];
+  const selectedSpecialists = specialists.filter((specialist) => requestedAgentIds.includes(specialist.id));
+  const codexDiagnostics = {
+    backend: "connected",
+    cliCommand: "codex exec",
+    model: getCodexModelLabel(),
+    runMode: "codex",
+  };
+  let index = 901;
+
+  const permissionReviews = createPermissionReviewEvents(task.input, taskId, index, coordinatorPolicy, codexDiagnostics);
+  index = permissionReviews.nextIndex;
+  for (const reviewEvent of permissionReviews.events) {
+    yield reviewEvent;
+  }
+
+  if (permissionReviews.blocked) {
+    return;
+  }
+
+  if (!sameSpecialistRoute(requestedAgentIds, expectedRoute.selectedAgentIds)) {
+    yield event(taskId, index++, "luma", "agent.failed", "Queued synthesis route no longer matches the requested task.", {
+      ...codexDiagnostics,
+      codexStatus: "failed",
+    });
+    return;
+  }
+
+  const extraReports = unselectedReportNames(task.reports, requestedAgentIds, agents);
+
+  if (extraReports.length > 0) {
+    yield event(taskId, index++, "luma", "agent.failed", `Queued synthesis included unselected specialist reports: ${extraReports.join(", ")}`, {
+      ...codexDiagnostics,
+      codexStatus: "failed",
+    });
+    return;
+  }
+
+  const reports = selectedReports(task.reports, requestedAgentIds);
+
+  try {
+    assertSelectedSpecialistsReported(reports, selectedSpecialists);
+  } catch (error) {
+    yield event(taskId, index++, "luma", "agent.failed", messageFromError(error), {
+      ...codexDiagnostics,
+      codexStatus: "failed",
+    });
+    return;
+  }
+
+  yield event(taskId, index++, "luma", "agent.working", "Luma starts queued Codex synthesis", {
+    ...codexDiagnostics,
+    codexStatus: "calling",
+    progress: "Luma queued Codex synthesis route started.",
+  });
+
+  const progressQueue = createAsyncQueue<CodexExecutionProgress>();
+  const execution = workflow
+    .synthesize(task.input, reports, (progress) => {
+      progressQueue.push(progress);
+    }, {
+      agents,
+      globalAgents,
+      previousRun: options.previousRun,
+      sandboxMode: options.sandboxMode,
+      signal: options.signal,
+      workspacePath: options.workspacePath,
+    })
+    .then(
+      (value) => ({ type: "result" as const, value }),
+      (error: unknown) => ({ error, type: "error" as const }),
+    )
+    .finally(() => {
+      progressQueue.close();
+    });
+
+  while (true) {
+    const progress = await progressQueue.next();
+
+    if (options.signal?.aborted) {
+      await execution;
+      throw abortError();
+    }
+
+    if (!progress) {
+      break;
+    }
+
+    yield event(taskId, index++, "luma", "agent.working", "Luma Codex CLI is streaming synthesis", {
+      ...codexDiagnostics,
+      codexStatus: "streaming",
+      progress: "Luma Codex CLI is streaming synthesis.",
+      rawChunk: progress.rawChunk,
+      stderrChunk: progress.stderrChunk,
+    });
+  }
+
+  const outcome = await execution;
+
+  if (outcome.type === "error") {
+    yield event(taskId, index++, "luma", "agent.failed", messageFromError(outcome.error), {
+      ...codexDiagnostics,
+      codexStatus: "failed",
+      rawResponse: rawResponseFromError(outcome.error),
+    });
+    return;
+  }
+
+  let finalOutput = "";
+
+  try {
+    finalOutput = requireFinalOutput(outcome.value.finalOutput);
+  } catch (error) {
+    yield event(taskId, index++, "luma", "agent.failed", messageFromError(error), {
+      ...codexDiagnostics,
+      codexStatus: "failed",
+      rawResponse: outcome.value.rawResponse,
+    });
+    return;
+  }
+
+  yield event(taskId, index++, "luma", "approval.requested", "Luma raises the blue approval lantern");
+  for (const specialist of selectedSpecialists) {
+    yield event(taskId, index++, specialist.id, "agent.done", `${specialist.displayName} returns to their alcove`);
+  }
+  yield event(taskId, index++, "luma", "agent.done", "Luma places the final summary on the central desk", {
+    ...codexDiagnostics,
+    codexStatus: "completed",
+    finalOutput,
+    model: outcome.value.model ?? getCodexModelLabel(),
+    rawResponse: outcome.value.rawResponse,
+  });
+}
+
 export async function collectCodexEvents(
   input: string,
   workflow?: CodexWorkflowExecutors,
@@ -1036,6 +1454,34 @@ export async function collectCodexEvents(
   const events: AgentEvent[] = [];
 
   for await (const item of createCodexEvents(input, workflow, options)) {
+    events.push(item);
+  }
+
+  return events;
+}
+
+export async function collectCodexAgentJobEvents(
+  job: CodexAgentJobInput,
+  workflow?: CodexWorkflowExecutors,
+  options?: CodexExecutionOptions,
+): Promise<AgentEvent[]> {
+  const events: AgentEvent[] = [];
+
+  for await (const item of createCodexAgentJobEvents(job, workflow, options)) {
+    events.push(item);
+  }
+
+  return events;
+}
+
+export async function collectCodexSynthesisEvents(
+  task: CodexSynthesisInput,
+  workflow?: CodexWorkflowExecutors,
+  options?: CodexExecutionOptions,
+): Promise<AgentEvent[]> {
+  const events: AgentEvent[] = [];
+
+  for await (const item of createCodexSynthesisEvents(task, workflow, options)) {
     events.push(item);
   }
 

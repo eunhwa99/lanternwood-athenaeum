@@ -1,0 +1,21 @@
+{
+  "id": "neria",
+  "displayName": "Neria",
+  "systemRole": "MemoryAgent",
+  "worldRole": "Keeper of records",
+  "color": "#8FA765",
+  "homePosition": { "x": 260, "y": 420 },
+  "futureTools": ["memory-search", "preference-lookup", "context-summary"],
+  "promptInstruction": "Extract stable user preferences, project constraints, and relevant memory-like context from the request only. Do not invent private memory. Return concise context notes only.",
+  "routing": {
+    "keywords": [
+      "my memory", "personal memory", "global memory", "long-term memory", "conversation memory", "user memory",
+      "previous run", "prior run", "earlier run", "last run", "previous question", "previous request",
+      "previous answer", "previous delegation", "previous agent", "conversation context", "user preference",
+      "global persona", "obsidian memory", "memory context", "previous context", "방금", "이전 질문", "이전 요청", "이전 실행",
+      "이전 런", "이전 대화", "이전 답변", "지난 질문", "지난 요청", "지난 실행", "지난 대화",
+      "기억", "사용자 맥락", "사용자 선호", "옵시디언 기억"
+    ],
+    "reason": "previous-run context, user preferences, Obsidian/global persona, or long-term memory context"
+  }
+}
