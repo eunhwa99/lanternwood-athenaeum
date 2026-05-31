@@ -1,5 +1,5 @@
 import type { AgentEvent } from "../events/types";
-import type { RunAdapter } from "./runAdapter";
+import type { RunAdapter, RunRequestOptions } from "./runAdapter";
 
 type CodexRunAdapterOptions = {
   endpoint?: string;
@@ -28,9 +28,13 @@ function parseAgentEvent(message: string): AgentEvent | null {
 
 export function createCodexRunAdapter({ endpoint = "/api/runs", fetchImpl = fetch }: CodexRunAdapterOptions = {}): RunAdapter {
   return {
-    async *startRun(input: string) {
+    async *startRun(input: string, options?: RunRequestOptions) {
       const response = await fetchImpl(endpoint, {
-        body: JSON.stringify({ input }),
+        body: JSON.stringify({
+          input,
+          ...(options?.approvalToken ? { approvalToken: options.approvalToken } : {}),
+          ...(options?.sandbox ? { sandbox: options.sandbox } : {}),
+        }),
         headers: {
           "Content-Type": "application/json",
         },

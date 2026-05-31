@@ -5,6 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentEvent } from "../src/events/types";
+import { isSandboxMode, type SandboxMode } from "../src/harness/permissions";
 
 type SpecialistId = "argus" | "neria" | "orion" | "quill";
 type SpecialistReports = Partial<Record<SpecialistId, string>>;
@@ -14,6 +15,7 @@ type CodexExecutionProgress = {
 };
 type CodexProgressHandler = (progress: CodexExecutionProgress) => void;
 type CodexExecutionOptions = {
+  sandbox?: SandboxMode;
   signal?: AbortSignal;
 };
 
@@ -91,6 +93,7 @@ const schemaPath = join(dirname(fileURLToPath(import.meta.url)), "codexOutputSch
 
 type RunCodexCommandOptions = {
   outputSchemaPath?: string;
+  sandbox?: SandboxMode;
   signal?: AbortSignal;
 };
 
@@ -245,7 +248,20 @@ User request:
 ${input}`;
 }
 
-function buildSpecialistPrompt(specialist: (typeof REQUIRED_SPECIALISTS)[number], input: string) {
+function permissionRequestInstructions(currentSandbox: SandboxMode) {
+  return `Current sandbox: ${currentSandbox}.
+
+If this sandbox blocks the useful work and you need broader permission, do not end with a refusal. Set "sandbox" to exactly one of "workspace-write" or "danger-full-access". Return only this JSON object:
+{
+  "permissionRequest": {
+    "sandbox": "danger-full-access",
+    "reason": "short reason for the user",
+    "blockedAction": "specific command, path, network target, or action"
+  }
+}`;
+}
+
+function buildSpecialistPrompt(specialist: (typeof REQUIRED_SPECIALISTS)[number], input: string, sandbox: SandboxMode) {
   const roleInstructions: Record<SpecialistId, string> = {
     argus:
       "Review the likely answer for risks, missing evidence, unsafe assumptions, and readiness. Return concise review notes only.",
@@ -261,14 +277,18 @@ function buildSpecialistPrompt(specialist: (typeof REQUIRED_SPECIALISTS)[number]
 
 You are one specialist in The Lanternwood Athenaeum. Luma will synthesize your output with other specialists.
 
+${permissionRequestInstructions(sandbox)}
+
 User request:
 ${input}`;
 }
 
-function buildSynthesisPrompt(input: string, reports: Required<SpecialistReports>) {
+function buildSynthesisPrompt(input: string, reports: Required<SpecialistReports>, sandbox: SandboxMode) {
   return `You are Luma, the Lanternwood Athenaeum orchestrator.
 
 Synthesize the specialist outputs into the final response for the user. Keep it concise, concrete, and directly useful.
+
+${permissionRequestInstructions(sandbox)}
 
 User request:
 ${input}
@@ -312,10 +332,158 @@ function parseCodexJsonOutput(output: string): CodexExecutionResult {
   }
 }
 
+export function createCodexCliRunErrorFromOutput(message: string, output: string) {
+  try {
+    const partial = parseCodexJsonOutput(output);
+
+    return new CodexCliRunError(message, partial.specialistReports, output);
+  } catch {
+    return new CodexCliRunError(message, {}, output || undefined);
+  }
+}
+
+type PermissionRequest = {
+  blockedAction?: string;
+  reason: string;
+  sandbox: SandboxMode;
+};
+
+function isBroaderSandbox(currentSandbox: SandboxMode, requestedSandbox: SandboxMode) {
+  return (
+    (currentSandbox === "read-only" && requestedSandbox !== "read-only") ||
+    (currentSandbox === "workspace-write" && requestedSandbox === "danger-full-access")
+  );
+}
+
+function permissionRequestFromValue(value: unknown, currentSandbox: SandboxMode): PermissionRequest | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const request = (value as Record<string, unknown>).permissionRequest;
+  if (!request || typeof request !== "object") {
+    return null;
+  }
+
+  const record = request as Record<string, unknown>;
+  const reason = typeof record.reason === "string" ? record.reason.trim() : "";
+  const blockedAction = typeof record.blockedAction === "string" ? record.blockedAction.trim() : undefined;
+
+  if (!reason || !isSandboxMode(record.sandbox) || !isBroaderSandbox(currentSandbox, record.sandbox)) {
+    return null;
+  }
+
+  return {
+    blockedAction,
+    reason,
+    sandbox: record.sandbox,
+  };
+}
+
+function parseJson(value: string): unknown {
+  return JSON.parse(value);
+}
+
+function findPermissionRequest(value: unknown, currentSandbox: SandboxMode, depth = 0): PermissionRequest | null {
+  if (depth > 6 || value == null) {
+    return null;
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+
+    if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+      return null;
+    }
+
+    try {
+      return findPermissionRequest(parseJson(trimmed), currentSandbox, depth + 1);
+    } catch {
+      return null;
+    }
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const request = findPermissionRequest(item, currentSandbox, depth + 1);
+
+      if (request) {
+        return request;
+      }
+    }
+
+    return null;
+  }
+
+  if (typeof value !== "object") {
+    return null;
+  }
+
+  const direct = permissionRequestFromValue(value, currentSandbox);
+
+  if (direct) {
+    return direct;
+  }
+
+  for (const nestedValue of Object.values(value)) {
+    const request = findPermissionRequest(nestedValue, currentSandbox, depth + 1);
+
+    if (request) {
+      return request;
+    }
+  }
+
+  return null;
+}
+
+function extractPermissionRequest(output: string, currentSandbox: SandboxMode): PermissionRequest | null {
+  const trimmed = output.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    const request = findPermissionRequest(parseJson(trimmed), currentSandbox);
+
+    if (request) {
+      return request;
+    }
+  } catch {
+    // Codex --json stdout is JSONL. Fall through and inspect individual records.
+  }
+
+  for (const line of trimmed.split(/\r?\n/)) {
+    const candidate = line.trim().startsWith("data:") ? line.trim().slice("data:".length).trimStart() : line.trim();
+
+    if (!candidate) {
+      continue;
+    }
+
+    try {
+      const request = findPermissionRequest(parseJson(candidate), currentSandbox);
+
+      if (request) {
+        return request;
+      }
+    } catch {
+      // Ignore non-JSON progress lines.
+    }
+  }
+
+  return null;
+}
+
+function permissionRequestFromError(error: unknown, currentSandbox: SandboxMode): PermissionRequest | null {
+  const rawResponse = rawResponseFromError(error);
+
+  return rawResponse ? extractPermissionRequest(rawResponse, currentSandbox) : null;
+}
+
 async function runCodexCommand(
   prompt: string,
   onProgress?: CodexProgressHandler,
-  { outputSchemaPath, signal }: RunCodexCommandOptions = {},
+  { outputSchemaPath, sandbox, signal }: RunCodexCommandOptions = {},
 ): Promise<string> {
   const tempDirectory = await mkdtemp(join(tmpdir(), "lanternwood-codex-"));
   const outputPath = join(tempDirectory, "last-message.json");
@@ -333,7 +501,7 @@ async function runCodexCommand(
         "--json",
         ...(process.env.LANTERNWOOD_CODEX_MODEL?.trim() ? ["--model", process.env.LANTERNWOOD_CODEX_MODEL.trim()] : []),
         "--sandbox",
-        "read-only",
+        sandbox ?? "workspace-write",
         "--cd",
         process.cwd(),
         ...(outputSchemaPath ? ["--output-schema", outputSchemaPath] : []),
@@ -414,19 +582,9 @@ async function runCodexCommand(
 
           try {
             const rawResponse = await readFile(outputPath, "utf8");
-            try {
-              const partial = parseCodexJsonOutput(rawResponse);
-              settleReject(new CodexCliRunError(message, partial.specialistReports, rawResponse));
-            } catch {
-              settleReject(new CodexCliRunError(message, {}, rawResponse));
-            }
+            settleReject(createCodexCliRunErrorFromOutput(message, rawResponse));
           } catch {
-            try {
-              const partial = parseCodexJsonOutput(stdout);
-              settleReject(new CodexCliRunError(message, partial.specialistReports, stdout));
-            } catch {
-              settleReject(new CodexCliRunError(message));
-            }
+            settleReject(createCodexCliRunErrorFromOutput(message, stdout));
           }
         })();
       });
@@ -442,7 +600,10 @@ async function runCodexCommand(
 
 export function createCodexCliExecutor({ runCommand = runCodexCommand }: CodexCliExecutorOptions = {}): CodexExecutor {
   return async (input: string, onProgress?: CodexProgressHandler) => {
-    const output = await runCommand(buildCodexPrompt(input), onProgress, { outputSchemaPath: schemaPath });
+    const output = await runCommand(buildCodexPrompt(input), onProgress, {
+      outputSchemaPath: schemaPath,
+      sandbox: "workspace-write",
+    });
 
     try {
       return {
@@ -461,7 +622,11 @@ export function createCodexCliWorkflow({
 }: CodexCliExecutorOptions = {}): CodexWorkflowExecutors {
   return {
     async runSpecialist(specialist, input, onProgress, options) {
-      const output = await runCommand(buildSpecialistPrompt(specialist, input), onProgress, { signal: options?.signal });
+      const sandbox = options?.sandbox ?? "workspace-write";
+      const output = await runCommand(buildSpecialistPrompt(specialist, input, sandbox), onProgress, {
+        sandbox,
+        signal: options?.signal,
+      });
       const report = output.trim();
 
       if (!report) {
@@ -475,7 +640,11 @@ export function createCodexCliWorkflow({
       };
     },
     async synthesize(input, reports, onProgress, options) {
-      const output = await runCommand(buildSynthesisPrompt(input, reports), onProgress, { signal: options?.signal });
+      const sandbox = options?.sandbox ?? "workspace-write";
+      const output = await runCommand(buildSynthesisPrompt(input, reports, sandbox), onProgress, {
+        sandbox,
+        signal: options?.signal,
+      });
       const finalOutput = output.trim();
 
       if (!finalOutput) {
@@ -580,6 +749,17 @@ function requiredReportsFrom(reports: SpecialistReports): Required<SpecialistRep
   };
 }
 
+function remainingSpecialistsForApprovalPause(
+  requestingSpecialistId: SpecialistId,
+  reportedSpecialists: Set<SpecialistId>,
+  failedSpecialists: Set<SpecialistId>,
+) {
+  return REQUIRED_SPECIALISTS.filter(
+    (specialist) =>
+      specialist.id !== requestingSpecialistId && !reportedSpecialists.has(specialist.id) && !failedSpecialists.has(specialist.id),
+  );
+}
+
 export async function* createCodexEvents(
   input: string,
   workflow: CodexWorkflowExecutors = createCodexCliWorkflow(),
@@ -589,11 +769,13 @@ export async function* createCodexEvents(
   let index = 1;
   const reportedSpecialists = new Set<SpecialistId>();
   const failedSpecialists = new Set<SpecialistId>();
+  const currentSandbox = options.sandbox ?? "workspace-write";
   const codexDiagnostics = {
     backend: "connected",
     cliCommand: "codex exec",
     model: getCodexModelLabel(),
     runMode: "codex",
+    sandbox: currentSandbox,
   };
 
   yield event(taskId, index++, "luma", "task.created", input, {
@@ -638,9 +820,16 @@ export async function* createCodexEvents(
     const reports: SpecialistReports = {};
     let openSpecialistRoutes = REQUIRED_SPECIALISTS.length;
     let firstError: unknown;
+    let permissionRequested = false;
+    let permissionRequestingSpecialistId: SpecialistId | null = null;
+    const routeAbortController = new AbortController();
+    const combinedSignal = options.signal
+      ? AbortSignal.any([options.signal, routeAbortController.signal])
+      : routeAbortController.signal;
+    const routeExecutions: Array<Promise<void>> = [];
 
     for (const specialist of REQUIRED_SPECIALISTS) {
-      void workflow
+      const routeExecution = workflow
         .runSpecialist(specialist, input, (progress) => {
           queue.push({
             agentId: specialist.id,
@@ -648,7 +837,7 @@ export async function* createCodexEvents(
             message: `${specialist.displayName} Codex CLI is streaming output`,
             progress,
           });
-        }, { signal: options.signal })
+        }, { sandbox: currentSandbox, signal: combinedSignal })
         .then((result) => {
           queue.push({ kind: "specialistResult", result, specialist });
         })
@@ -662,6 +851,7 @@ export async function* createCodexEvents(
             queue.close();
           }
         });
+      routeExecutions.push(routeExecution);
     }
 
     while (true) {
@@ -687,6 +877,30 @@ export async function* createCodexEvents(
       }
 
       if (item.kind === "specialistError") {
+        const permissionRequest = permissionRequestFromError(item.error, currentSandbox);
+
+        if (permissionRequest) {
+          permissionRequested = true;
+          permissionRequestingSpecialistId = item.specialist.id;
+          routeAbortController.abort();
+          yield event(
+            taskId,
+            index++,
+            item.specialist.id,
+            "approval.requested",
+            `${item.specialist.displayName} requests ${permissionRequest.sandbox} permission: ${permissionRequest.reason}`,
+            {
+              ...codexDiagnostics,
+              blockedAction: permissionRequest.blockedAction,
+              codexStatus: "waiting-approval",
+              rawResponse: rawResponseFromError(item.error),
+              reason: permissionRequest.reason,
+              requestedSandbox: permissionRequest.sandbox,
+            },
+          );
+          break;
+        }
+
         firstError ??= item.error;
         failedSpecialists.add(item.specialist.id);
         yield event(taskId, index++, item.specialist.id, "agent.failed", messageFromError(item.error), {
@@ -698,6 +912,30 @@ export async function* createCodexEvents(
       }
 
       const report = item.result.report.trim();
+      const permissionRequest =
+        extractPermissionRequest(item.result.rawResponse ?? "", currentSandbox) ?? extractPermissionRequest(report, currentSandbox);
+
+      if (permissionRequest) {
+        permissionRequested = true;
+        permissionRequestingSpecialistId = item.specialist.id;
+        routeAbortController.abort();
+        yield event(
+          taskId,
+          index++,
+          item.specialist.id,
+          "approval.requested",
+          `${item.specialist.displayName} requests ${permissionRequest.sandbox} permission: ${permissionRequest.reason}`,
+          {
+            ...codexDiagnostics,
+            blockedAction: permissionRequest.blockedAction,
+            codexStatus: "waiting-approval",
+            rawResponse: item.result.rawResponse,
+            reason: permissionRequest.reason,
+            requestedSandbox: permissionRequest.sandbox,
+          },
+        );
+        break;
+      }
 
       if (report) {
         reports[item.specialist.id] = report;
@@ -710,6 +948,28 @@ export async function* createCodexEvents(
         });
         reportedSpecialists.add(item.specialist.id);
       }
+    }
+
+    if (permissionRequested) {
+      await Promise.allSettled(routeExecutions);
+
+      if (permissionRequestingSpecialistId) {
+        for (const specialist of remainingSpecialistsForApprovalPause(permissionRequestingSpecialistId, reportedSpecialists, failedSpecialists)) {
+          yield event(
+            taskId,
+            index++,
+            specialist.id,
+            "agent.paused",
+            `${specialist.displayName}'s route pauses while approval is pending`,
+            {
+              ...codexDiagnostics,
+              codexStatus: "waiting-approval",
+            },
+          );
+        }
+      }
+
+      return;
     }
 
     if (firstError) {
@@ -731,7 +991,7 @@ export async function* createCodexEvents(
     const synthesisExecution = workflow
       .synthesize(input, requiredReports, (progress) => {
         synthesisQueue.push(progress);
-      }, { signal: options.signal })
+      }, { sandbox: currentSandbox, signal: combinedSignal })
       .then(
         (value) => ({ type: "result" as const, value }),
         (error: unknown) => ({ error, type: "error" as const }),
@@ -764,16 +1024,47 @@ export async function* createCodexEvents(
     const synthesisOutcome = await synthesisExecution;
 
     if (synthesisOutcome.type === "error") {
+      const permissionRequest = permissionRequestFromError(synthesisOutcome.error, currentSandbox);
+
+      if (permissionRequest) {
+        yield event(taskId, index++, "luma", "approval.requested", `Luma requests ${permissionRequest.sandbox} permission: ${permissionRequest.reason}`, {
+          ...codexDiagnostics,
+          blockedAction: permissionRequest.blockedAction,
+          codexStatus: "waiting-approval",
+          rawResponse: rawResponseFromError(synthesisOutcome.error),
+          reason: permissionRequest.reason,
+          requestedSandbox: permissionRequest.sandbox,
+        });
+        return;
+      }
+
       throw synthesisOutcome.error;
     }
 
     const result = synthesisOutcome.value;
     const finalRawResponse = result.rawResponse;
+    const rawResponsePermissionRequest = finalRawResponse ? extractPermissionRequest(finalRawResponse, currentSandbox) : null;
+    const finalOutputPermissionRequest = rawResponsePermissionRequest
+      ? null
+      : extractPermissionRequest(result.finalOutput, currentSandbox);
+    const synthesisPermissionRequest = rawResponsePermissionRequest ?? finalOutputPermissionRequest;
+
+    if (synthesisPermissionRequest) {
+      yield event(taskId, index++, "luma", "approval.requested", `Luma requests ${synthesisPermissionRequest.sandbox} permission: ${synthesisPermissionRequest.reason}`, {
+        ...codexDiagnostics,
+        blockedAction: synthesisPermissionRequest.blockedAction,
+        codexStatus: "waiting-approval",
+        rawResponse: finalOutputPermissionRequest ? result.finalOutput : finalRawResponse,
+        reason: synthesisPermissionRequest.reason,
+        requestedSandbox: synthesisPermissionRequest.sandbox,
+      });
+      return;
+    }
 
     try {
       const finalOutput = requireFinalOutput(result.finalOutput);
 
-      yield event(taskId, index++, "luma", "approval.requested", "Luma raises the blue approval lantern");
+      yield event(taskId, index++, "luma", "agent.reporting", "Luma raises the blue approval lantern");
       yield event(taskId, index++, "orion", "agent.done", "Orion returns to the star-map balcony");
       yield event(taskId, index++, "neria", "agent.done", "Neria closes the archive ledger");
       yield event(taskId, index++, "quill", "agent.done", "Quill shelves the illuminated draft");

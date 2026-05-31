@@ -87,6 +87,88 @@ describe("AppShell", () => {
     expect(screen.getByText("scene-luma-failed")).toBeInTheDocument();
   });
 
+  it("lets the user approve and retry a run with the requested sandbox", async () => {
+    const seenOptions: unknown[] = [];
+    const approvalRunAdapter: RunAdapter = {
+      async *startRun(_input, options) {
+        seenOptions.push(options);
+
+        if (!options?.sandbox) {
+          yield {
+            agentId: "luma",
+            eventId: "task-1-client-1",
+            message: "Draft a focused project plan",
+            payload: {
+              backend: "connected",
+              cliCommand: "codex exec",
+              codexStatus: "calling",
+              model: "gpt-5.3-codex",
+              runMode: "codex",
+            },
+            taskId: "task-1",
+            timestamp: "2026-05-26T00:00:00.000Z",
+            type: "task.created",
+          };
+          yield {
+            agentId: "orion",
+            eventId: "task-1-client-2",
+            message: "Orion requests danger-full-access permission: Needs a file outside the workspace.",
+            payload: {
+              approvalToken: "approval-1",
+              blockedAction: "write /Users/eunhwa/shared/report.md",
+              codexStatus: "waiting-approval",
+              reason: "Needs a file outside the workspace.",
+              requestedSandbox: "danger-full-access",
+            },
+            taskId: "task-1",
+            timestamp: "2026-05-26T00:00:01.000Z",
+            type: "approval.requested",
+          };
+          return;
+        }
+
+        yield {
+          agentId: "luma",
+          eventId: "task-2-client-1",
+          message: "Draft a focused project plan",
+          taskId: "task-2",
+          timestamp: "2026-05-26T00:00:02.000Z",
+          type: "task.created",
+        };
+        yield {
+          agentId: "luma",
+          eventId: "task-2-client-2",
+          message: "Luma places the final summary on the central desk",
+          payload: {
+            finalOutput: `Retried with ${options.sandbox}`,
+          },
+          taskId: "task-2",
+          timestamp: "2026-05-26T00:00:03.000Z",
+          type: "agent.done",
+        };
+      },
+    };
+
+    renderApp(<AppShell runAdapter={approvalRunAdapter} runMode="codex" />);
+
+    fireEvent.change(screen.getByLabelText("Task request"), {
+      target: { value: "Draft a focused project plan" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send to Luma" }));
+
+    await screen.findByRole("region", { name: "Permission request" });
+    expect(screen.getByRole("region", { name: "Permission request" })).toHaveTextContent(
+      "Needs a file outside the workspace.",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Approve and retry" }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Retried with danger-full-access").length).toBeGreaterThan(0);
+    });
+    expect(seenOptions).toEqual([undefined, { approvalToken: "approval-1", sandbox: "danger-full-access" }]);
+  });
+
   it("keeps Codex diagnostics visible when the Codex backend fails before streaming events", async () => {
     const failingRunAdapter: RunAdapter = {
       async *startRun() {

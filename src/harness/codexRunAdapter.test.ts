@@ -43,6 +43,28 @@ describe("codex run adapter", () => {
     expect(events[0].type).toBe("task.created");
   });
 
+  it("passes approved sandbox overrides to the backend", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.close();
+      },
+    });
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(body, { status: 200 }));
+    const adapter = createCodexRunAdapter({ endpoint: "/api/runs", fetchImpl: fetchMock });
+
+    for await (const event of adapter.startRun("Draft a plan", { approvalToken: "approval-1", sandbox: "danger-full-access" })) {
+      expect(event).toBeDefined();
+    }
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/runs",
+      expect.objectContaining({
+        body: JSON.stringify({ input: "Draft a plan", approvalToken: "approval-1", sandbox: "danger-full-access" }),
+        method: "POST",
+      }),
+    );
+  });
+
   it("throws a useful error when the backend is unavailable", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response("No Codex login", { status: 503 }));
     const adapter = createCodexRunAdapter({ endpoint: "/api/runs", fetchImpl: fetchMock });

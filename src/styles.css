@@ -33,19 +33,18 @@ input {
 }
 
 .library-stage {
-  display: grid;
-  grid-template-columns: minmax(0, min(100%, calc((100vh - 112px) * 960 / 620), 960px));
-  grid-template-areas:
-    "scene"
-    "input"
-    "inspector"
-    "output";
-  grid-template-rows: auto auto auto auto;
-  align-content: start;
-  justify-content: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   gap: 16px;
   padding: 24px;
   overflow-y: auto;
+}
+
+.library-stage > * {
+  flex: 0 0 auto;
+  width: min(100%, calc((100vh - 112px) * 960 / 620), 960px);
+  max-width: 100%;
 }
 
 .scene-frame {
@@ -331,14 +330,66 @@ p {
   font-weight: 700;
 }
 
+.permission-request-panel {
+  grid-area: approval;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  max-width: 100%;
+  border: 1px solid rgba(228, 185, 105, 0.34);
+  border-radius: 8px;
+  background: rgba(47, 40, 29, 0.86);
+  padding: 14px 16px;
+}
+
+.permission-request-panel h2 {
+  margin-bottom: 6px;
+  font-size: 1rem;
+}
+
+.permission-request-panel p {
+  margin-bottom: 0;
+  color: #e6dcc7;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.permission-blocked-action {
+  margin-top: 6px;
+  color: #d8c781;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.82rem;
+}
+
+.permission-request-panel button {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 8px;
+  background: #e4b969;
+  color: #13201d;
+  padding: 10px 14px;
+  font-weight: 700;
+}
+
 @media (min-width: 1700px) {
   .library-stage {
+    display: grid;
     grid-template-columns: minmax(0, 960px) minmax(320px, 380px);
     grid-template-areas:
       "scene inspector"
       "input inspector"
       "output inspector";
     align-items: start;
+  }
+
+  .library-stage:has(.permission-request-panel) {
+    grid-template-areas:
+      "scene inspector"
+      "input inspector"
+      "approval inspector"
+      "output inspector";
   }
 
   .final-output-panel {
@@ -377,5 +428,10 @@ p {
 
   .task-input {
     grid-template-columns: 1fr;
+  }
+
+  .permission-request-panel {
+    align-items: stretch;
+    flex-direction: column;
   }
 }

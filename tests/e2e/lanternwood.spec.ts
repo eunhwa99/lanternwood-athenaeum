@@ -208,9 +208,13 @@ test("renders a nonblank Pixi scene and completes a mock agent run", async ({ pa
   expect(canvasBox!.width).toBeLessThanOrEqual(frameBox!.width + 1);
   expect(canvasBox!.height).toBeLessThanOrEqual(frameBox!.height + 1);
 
-  const initialScene = inspectScenePixels(await canvas.screenshot());
   for (const target of PIXI_COLOR_TARGETS.filter((item) => !item.region)) {
-    expect(initialScene[target.name], `${target.name} pixel count`).toBeGreaterThan(target.minPixels);
+    await expect
+      .poll(async () => inspectScenePixels(await canvas.screenshot())[target.name], {
+        message: `${target.name} pixel count`,
+        timeout: 10_000,
+      })
+      .toBeGreaterThan(target.minPixels);
   }
 
   await page.getByLabel("Task request").fill("Draft a focused project plan");
@@ -226,9 +230,9 @@ test("renders a nonblank Pixi scene and completes a mock agent run", async ({ pa
   expect(timelineCountBefore).toBeGreaterThan(0);
 
   await expect(timeline.getByText("Luma raises the blue approval lantern")).toBeVisible({ timeout: 30_000 });
-  await expect(page.locator(".agent-card", { hasText: "Luma" }).locator("strong")).toHaveText("waitingApproval");
+  await expect(page.locator(".agent-card", { hasText: "Luma" }).locator("strong")).toHaveText("reporting");
   const approvalLuma = await readDebugAgent(page, "luma");
-  expect(approvalLuma?.status).toBe("waitingApproval");
+  expect(approvalLuma?.status).toBe("reporting");
   await expect(timeline.getByText("Luma places the final summary on the central desk")).toBeVisible({ timeout: 45_000 });
   await expect(timeline.getByText("Orion returns to the star-map balcony")).toBeVisible();
   await expect(timeline.getByText("Neria closes the archive ledger")).toBeVisible();
@@ -288,6 +292,45 @@ test("renders a nonblank Pixi scene and completes a mock agent run", async ({ pa
     fullPage: true,
     maxDiffPixelRatio: 0.005,
   });
+});
+
+test("shows the permission approval panel and retries from the browser flow", async ({ page }) => {
+  await page.addInitScript(() => {
+    const testWindow = window as Window & {
+      __LANTERNWOOD_APPROVAL_TEST_FLOW__?: boolean;
+      __LANTERNWOOD_EVENT_DELAY_MS__?: number;
+    };
+
+    testWindow.__LANTERNWOOD_APPROVAL_TEST_FLOW__ = true;
+    testWindow.__LANTERNWOOD_EVENT_DELAY_MS__ = 10;
+  });
+  await page.goto("/");
+
+  await page.getByLabel("Task request").fill("Draft a focused project plan");
+  await page.getByRole("button", { name: "Send to Luma" }).click();
+
+  const permissionPanel = page.getByRole("region", { name: "Permission request" });
+  await expect(permissionPanel).toBeVisible();
+  await expect(permissionPanel).toContainText("Orion requests danger-full-access");
+  await expect(permissionPanel).toContainText("Needs a file outside the workspace.");
+  await expect(permissionPanel).toContainText("write /Users/eunhwa/shared/report.md");
+  await expect(page.locator(".agent-card", { hasText: "Orion" }).locator("strong")).toHaveText("waitingApproval");
+
+  const panelBox = await permissionPanel.boundingBox();
+  const sceneBox = await page.locator(".scene-frame").boundingBox();
+
+  expect(panelBox).not.toBeNull();
+  expect(sceneBox).not.toBeNull();
+  expect(panelBox!.y).toBeGreaterThan(sceneBox!.y + sceneBox!.height);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
+    .toBeLessThanOrEqual(1280);
+
+  await page.getByRole("button", { name: "Approve and retry" }).click();
+
+  await expect(permissionPanel).toBeHidden();
+  await expect(page.getByRole("region", { name: "Final output" })).toContainText("Approved retry completed with danger-full-access.");
+  await expect(page.locator(".agent-card", { hasText: "Luma" }).locator("strong")).toHaveText("done");
 });
 
 test("fits the Pixi scene inside the visible frame on mobile", async ({ page }) => {

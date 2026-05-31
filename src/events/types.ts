@@ -5,6 +5,7 @@ export type AgentEventType =
   | "agent.planning"
   | "agent.delegated"
   | "agent.moving"
+  | "agent.paused"
   | "agent.working"
   | "agent.reporting"
   | "agent.reviewing"

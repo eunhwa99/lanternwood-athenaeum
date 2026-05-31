@@ -20,6 +20,8 @@ npm run dev:codex
 
 In Codex mode, Luma starts separate Codex CLI routes for Orion, Neria, Quill, and Argus, then runs a final Luma synthesis route. The Live Run Inspector shows each route's status, streamed raw chunks, final raw response, and verified report.
 
+Live Codex routes run with `workspace-write` by default. If a route needs broader access, it should return a structured permission request instead of ending the task; the UI shows an approval panel, and an approved retry runs with the requested `danger-full-access` sandbox using a one-use backend approval token.
+
 Optional local `.env` values:
 
 ```sh

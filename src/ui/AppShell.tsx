@@ -4,8 +4,9 @@ import type { AgentId } from "../agents/types";
 import { createInitialRunState, reduceAgentEvent } from "../events/reducer";
 import type { AgentEvent, AgentStatus, RunState } from "../events/types";
 import { createCodexRunAdapter } from "../harness/codexRunAdapter";
-import { createMockRunAdapter } from "../harness/mockRunAdapter";
-import type { RunAdapter } from "../harness/runAdapter";
+import { createMockApprovalRunAdapter, createMockRunAdapter } from "../harness/mockRunAdapter";
+import { isSandboxMode, type SandboxMode } from "../harness/permissions";
+import type { RunAdapter, RunRequestOptions } from "../harness/runAdapter";
 import { LanternwoodScene } from "../world/LanternwoodScene";
 import { AgentStatusPanel } from "./AgentStatusPanel";
 import { FinalOutputPanel } from "./FinalOutputPanel";
@@ -15,6 +16,7 @@ import { Timeline } from "./Timeline";
 
 declare global {
   interface Window {
+    __LANTERNWOOD_APPROVAL_TEST_FLOW__?: boolean;
     __LANTERNWOOD_EVENT_DELAY_MS__?: number;
   }
 }
@@ -32,6 +34,10 @@ const visibleMockRunAdapter = createMockRunAdapter({ eventDelayMs: getVisibleEve
 function createDefaultRunAdapter() {
   if (import.meta.env.VITE_RUN_ADAPTER === "codex") {
     return createCodexRunAdapter();
+  }
+
+  if (typeof window !== "undefined" && window.__LANTERNWOOD_APPROVAL_TEST_FLOW__ === true) {
+    return createMockApprovalRunAdapter({ eventDelayMs: getVisibleEventDelayMs() });
   }
 
   return visibleMockRunAdapter;
@@ -101,12 +107,79 @@ function clientFailureDiagnostics(runMode: "codex" | "mock", hasServerDiagnostic
   return hasServerDiagnostics ? { codexStatus: "failed" } : clientDiagnostics(runMode);
 }
 
+type PermissionRequestView = {
+  approvalToken?: string;
+  agentName: string;
+  blockedAction?: string;
+  prompt: string;
+  reason: string;
+  requestedSandbox: SandboxMode;
+};
+
+function payloadString(event: AgentEvent, key: string) {
+  const value = event.payload?.[key];
+
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function latestPermissionRequest(state: RunState): PermissionRequestView | null {
+  for (let index = state.timeline.length - 1; index >= 0; index -= 1) {
+    const event = state.timeline[index];
+
+    if (event.type !== "approval.requested") {
+      continue;
+    }
+
+    const requestedSandbox = event.payload?.requestedSandbox;
+    const prompt = state.currentTask?.prompt;
+
+    if (!isSandboxMode(requestedSandbox) || !prompt) {
+      return null;
+    }
+
+    return {
+      approvalToken: payloadString(event, "approvalToken"),
+      agentName: AGENTS.find((agent) => agent.id === event.agentId)?.displayName ?? event.agentId,
+      blockedAction: payloadString(event, "blockedAction"),
+      prompt,
+      reason: payloadString(event, "reason") ?? event.message,
+      requestedSandbox,
+    };
+  }
+
+  return null;
+}
+
+function PermissionRequestPanel({
+  disabled,
+  onApprove,
+  request,
+}: {
+  disabled: boolean;
+  onApprove: (prompt: string, sandbox: SandboxMode, approvalToken?: string) => void;
+  request: PermissionRequestView;
+}) {
+  return (
+    <section className="permission-request-panel" aria-label="Permission request">
+      <div>
+        <h2>{request.agentName} requests {request.requestedSandbox}</h2>
+        <p>{request.reason}</p>
+        {request.blockedAction ? <p className="permission-blocked-action">{request.blockedAction}</p> : null}
+      </div>
+      <button disabled={disabled} onClick={() => onApprove(request.prompt, request.requestedSandbox, request.approvalToken)} type="button">
+        Approve and retry
+      </button>
+    </section>
+  );
+}
+
 export function AppShell({ runAdapter = defaultRunAdapter, runMode = defaultRunMode }: AppShellProps) {
   const initialState = useMemo(() => createInitialRunState(AGENTS), []);
   const [runState, setRunState] = useState<RunState>(initialState);
   const [isRunning, setIsRunning] = useState(false);
+  const permissionRequest = latestPermissionRequest(runState);
 
-  async function startRun(prompt: string) {
+  async function startRun(prompt: string, options?: RunRequestOptions) {
     setRunState(createInitialRunState(AGENTS));
     setIsRunning(true);
 
@@ -114,7 +187,7 @@ export function AppShell({ runAdapter = defaultRunAdapter, runMode = defaultRunM
     let sawTaskCreated = false;
 
     try {
-      for await (const event of runAdapter.startRun(prompt)) {
+      for await (const event of runAdapter.startRun(prompt, options)) {
         if (event.type === "task.created") {
           taskId = event.taskId;
           sawTaskCreated = true;
@@ -171,6 +244,13 @@ export function AppShell({ runAdapter = defaultRunAdapter, runMode = defaultRunM
           <LanternwoodScene state={runState} />
         </div>
         <TaskInput disabled={isRunning} onSubmit={startRun} />
+        {permissionRequest ? (
+          <PermissionRequestPanel
+            disabled={isRunning}
+            onApprove={(prompt, sandbox, approvalToken) => void startRun(prompt, { approvalToken, sandbox })}
+            request={permissionRequest}
+          />
+        ) : null}
         <LiveRunInspector runMode={runMode} state={runState} />
         <FinalOutputPanel output={runState.finalOutput} />
       </section>

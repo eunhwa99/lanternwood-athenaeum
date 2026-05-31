@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createMockRunAdapter, mockRunAdapter } from "./mockRunAdapter";
+import { createMockApprovalRunAdapter, createMockRunAdapter, mockRunAdapter } from "./mockRunAdapter";
 
 describe("mock run adapter", () => {
   it("emits a deterministic manager-led event sequence", async () => {
@@ -20,7 +20,7 @@ describe("mock run adapter", () => {
       "agent.working",
       "agent.reporting",
       "agent.reviewing",
-      "approval.requested",
+      "agent.reporting",
       "agent.done",
       "agent.done",
       "agent.done",
@@ -93,6 +93,28 @@ describe("mock run adapter", () => {
         .filter((event) => event.type === "agent.done")
         .map((event) => event.agentId),
     ).toEqual(["orion", "neria", "quill", "argus", "luma"]);
+  });
+
+  it("emits a permission request and completes after an approved retry", async () => {
+    const adapter = createMockApprovalRunAdapter();
+    const firstRun = [];
+    const retryRun = [];
+
+    for await (const event of adapter.startRun("Plan my interview prep")) {
+      firstRun.push(event);
+    }
+
+    for await (const event of adapter.startRun("Plan my interview prep", { approvalToken: "approval-1", sandbox: "danger-full-access" })) {
+      retryRun.push(event);
+    }
+
+    expect(firstRun.map((event) => event.type)).toEqual(["task.created", "approval.requested"]);
+    expect(firstRun[1].payload).toMatchObject({
+      approvalToken: "approval-1",
+      requestedSandbox: "danger-full-access",
+    });
+    expect(retryRun.map((event) => event.type)).toEqual(["task.created", "agent.done"]);
+    expect(retryRun[1].payload?.finalOutput).toBe("Approved retry completed with danger-full-access.");
   });
 
   it("can delay event delivery for visible UI animation", async () => {

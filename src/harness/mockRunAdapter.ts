@@ -62,7 +62,7 @@ export function createMockRunAdapter(options: MockRunAdapterOptions = {}): RunAd
         event(taskId, 10, "argus", "agent.reviewing", "Argus checks the answer for risk and gaps", {
           report: "Review note: verify scope, risk, and completion criteria before handoff.",
         }),
-        event(taskId, 11, "luma", "approval.requested", "Luma raises the blue approval lantern"),
+        event(taskId, 11, "luma", "agent.reporting", "Luma raises the blue approval lantern"),
         event(taskId, 12, "orion", "agent.done", "Orion returns to the star-map balcony"),
         event(taskId, 13, "neria", "agent.done", "Neria closes the archive ledger"),
         event(taskId, 14, "quill", "agent.done", "Quill shelves the illuminated draft"),
@@ -71,6 +71,41 @@ export function createMockRunAdapter(options: MockRunAdapterOptions = {}): RunAd
           finalOutput: "Here is the focused plan synthesized from Orion, Neria, Quill, and Argus.",
         }),
       ];
+
+      for (const item of events) {
+        if (eventDelayMs > 0) {
+          await wait(eventDelayMs);
+        }
+
+        yield item;
+      }
+    },
+  };
+}
+
+export function createMockApprovalRunAdapter(options: MockRunAdapterOptions = {}): RunAdapter {
+  const eventDelayMs = options.eventDelayMs ?? 0;
+
+  return {
+    async *startRun(input: string, runOptions) {
+      const taskId = stableTaskId(input);
+      const events: AgentEvent[] =
+        runOptions?.sandbox === "danger-full-access" && runOptions.approvalToken === "approval-1"
+          ? [
+              event(taskId, 1, "luma", "task.created", input),
+              event(taskId, 2, "luma", "agent.done", "Luma places the final summary on the central desk", {
+                finalOutput: "Approved retry completed with danger-full-access.",
+              }),
+            ]
+          : [
+              event(taskId, 1, "luma", "task.created", input),
+              event(taskId, 2, "orion", "approval.requested", "Orion requests danger-full-access permission: Needs a file outside the workspace.", {
+                approvalToken: "approval-1",
+                blockedAction: "write /Users/eunhwa/shared/report.md",
+                reason: "Needs a file outside the workspace.",
+                requestedSandbox: "danger-full-access",
+              }),
+            ];
 
       for (const item of events) {
         if (eventDelayMs > 0) {

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   collectCodexEvents,
+  CodexCliRunError,
+  createCodexCliRunErrorFromOutput,
   createCodexCliExecutor,
   createCodexCliWorkflow,
   getCodexConfigPath,
@@ -56,7 +58,7 @@ describe("codex cli workflow", () => {
       codexStatus: "calling",
       runMode: "codex",
     });
-    expect(events.find((event) => event.agentId === "orion" && event.type === "agent.reporting")?.payload).toEqual({
+    expect(events.find((event) => event.agentId === "orion" && event.type === "agent.reporting")?.payload).toMatchObject({
       backend: "connected",
       cliCommand: "codex exec",
       codexStatus: "completed",
@@ -172,7 +174,7 @@ describe("codex cli workflow", () => {
     const events = await collectCodexEvents("Draft a plan", workflow, { signal: controller.signal });
 
     expect(seenSignals.length).toBeGreaterThan(0);
-    expect(seenSignals.every((signal) => signal === controller.signal)).toBe(true);
+    expect(seenSignals.every((signal) => signal?.aborted)).toBe(true);
     expect(events.at(-1)).toMatchObject({
       agentId: "luma",
       message: "Codex CLI run aborted.",
@@ -190,7 +192,7 @@ describe("codex cli workflow", () => {
         async synthesize(_input, _reports, onProgress, options) {
           onProgress?.({ rawChunk: "{\"event\":\"synthesis.started\"}\n" });
           controller.abort();
-          synthesisObserved = options?.signal === controller.signal;
+          synthesisObserved = options?.signal?.aborted === true;
           throw new Error("synthesis stopped");
         },
       },
@@ -298,6 +300,324 @@ describe("codex cli workflow", () => {
     });
 
     expect(events.find((event) => event.agentId === "luma" && event.type === "agent.failed")?.payload?.rawResponse).toBeUndefined();
+  });
+
+  it("runs specialist and synthesis routes with workspace-write sandbox by default", async () => {
+    const seenSandboxes: unknown[] = [];
+    const workflow = createCodexCliWorkflow({
+      runCommand: async (_prompt, _onProgress, options) => {
+        seenSandboxes.push((options as { sandbox?: unknown } | undefined)?.sandbox);
+        return "Codex output";
+      },
+    });
+
+    await collectCodexEvents("Draft a plan", workflow);
+
+    expect(seenSandboxes).toEqual([
+      "workspace-write",
+      "workspace-write",
+      "workspace-write",
+      "workspace-write",
+      "workspace-write",
+    ]);
+  });
+
+  it("passes the default workspace-write sandbox to injected workflow routes", async () => {
+    const seenSandboxes: unknown[] = [];
+
+    await collectCodexEvents("Draft a plan", {
+      ...workflowFixture(),
+      async runSpecialist(specialist, _input, _onProgress, options) {
+        seenSandboxes.push(options?.sandbox);
+
+        return {
+          rawResponse: `${specialist.displayName} response`,
+          report: `${specialist.displayName} complete`,
+        };
+      },
+      async synthesize(_input, _reports, _onProgress, options) {
+        seenSandboxes.push(options?.sandbox);
+
+        return {
+          finalOutput: "Synthesized answer",
+          rawResponse: "Synthesized answer",
+        };
+      },
+    });
+
+    expect(seenSandboxes).toEqual([
+      "workspace-write",
+      "workspace-write",
+      "workspace-write",
+      "workspace-write",
+      "workspace-write",
+    ]);
+  });
+
+  it("turns structured permission requests into approval events instead of generic failures", async () => {
+    const events = await collectCodexEvents("Update files outside the workspace", {
+      ...workflowFixture(),
+      async runSpecialist(specialist) {
+        if (specialist.id === "orion") {
+          return {
+            rawResponse: JSON.stringify({
+              permissionRequest: {
+                blockedAction: "write /Users/eunhwa/shared/report.md",
+                reason: "The requested file lives outside the current workspace.",
+                sandbox: "danger-full-access",
+              },
+            }),
+            report: JSON.stringify({
+              permissionRequest: {
+                blockedAction: "write /Users/eunhwa/shared/report.md",
+                reason: "The requested file lives outside the current workspace.",
+                sandbox: "danger-full-access",
+              },
+            }),
+          };
+        }
+
+        return {
+          rawResponse: `${specialist.displayName} response`,
+          report: `${specialist.displayName} complete`,
+        };
+      },
+    });
+
+    const approval = events.find((event) => event.agentId === "orion" && event.type === "approval.requested");
+
+    expect(approval).toMatchObject({
+      message: "Orion requests danger-full-access permission: The requested file lives outside the current workspace.",
+      payload: {
+        blockedAction: "write /Users/eunhwa/shared/report.md",
+        codexStatus: "waiting-approval",
+        rawResponse: expect.stringContaining("permissionRequest"),
+        reason: "The requested file lives outside the current workspace.",
+        requestedSandbox: "danger-full-access",
+      },
+    });
+    expect(events.some((event) => event.agentId === "luma" && event.type === "agent.failed")).toBe(false);
+    expect(events.some((event) => event.agentId === "luma" && event.message === "Luma starts Codex synthesis")).toBe(false);
+  });
+
+  it("checks raw specialist responses for permission requests even when report text is normalized", async () => {
+    const rawResponse = JSON.stringify({
+      permissionRequest: {
+        blockedAction: "write /Users/eunhwa/shared/report.md",
+        reason: "The requested file lives outside the current workspace.",
+        sandbox: "danger-full-access",
+      },
+    });
+    const events = await collectCodexEvents("Update files outside the workspace", {
+      ...workflowFixture(),
+      async runSpecialist(specialist) {
+        if (specialist.id === "orion") {
+          return {
+            rawResponse,
+            report: "I need broader permission before continuing.",
+          };
+        }
+
+        return {
+          rawResponse: `${specialist.displayName} response`,
+          report: `${specialist.displayName} complete`,
+        };
+      },
+    });
+
+    expect(events.find((event) => event.agentId === "orion" && event.type === "approval.requested")).toMatchObject({
+      payload: {
+        rawResponse,
+        requestedSandbox: "danger-full-access",
+      },
+    });
+  });
+
+  it("turns structured permission requests from failed routes into approval events", async () => {
+    const rawResponse = JSON.stringify({
+      permissionRequest: {
+        blockedAction: "connect to external package registry",
+        reason: "The route needs network access outside the current sandbox.",
+        sandbox: "danger-full-access",
+      },
+    });
+    const events = await collectCodexEvents("Install a dependency", {
+      ...workflowFixture(),
+      async runSpecialist(specialist) {
+        if (specialist.id === "orion") {
+          throw new CodexCliRunError("Codex CLI exited with code 1", {}, rawResponse);
+        }
+
+        return {
+          rawResponse: `${specialist.displayName} response`,
+          report: `${specialist.displayName} complete`,
+        };
+      },
+    });
+
+    expect(events.find((event) => event.agentId === "orion" && event.type === "approval.requested")).toMatchObject({
+      payload: {
+        blockedAction: "connect to external package registry",
+        rawResponse,
+        requestedSandbox: "danger-full-access",
+      },
+    });
+    expect(events.some((event) => event.agentId === "orion" && event.type === "agent.failed")).toBe(false);
+  });
+
+  it("turns permission requests embedded in failed Codex JSONL stdout into approval events", async () => {
+    const rawResponse = [
+      JSON.stringify({ type: "turn.started" }),
+      JSON.stringify({
+        item: {
+          permissionRequest: {
+            blockedAction: "connect to external package registry",
+            reason: "The route needs network access outside the current sandbox.",
+            sandbox: "danger-full-access",
+          },
+        },
+        type: "message",
+      }),
+    ].join("\n");
+    const events = await collectCodexEvents("Install a dependency", {
+      ...workflowFixture(),
+      async runSpecialist(specialist) {
+        if (specialist.id === "orion") {
+          throw createCodexCliRunErrorFromOutput("Codex CLI exited with code 1", rawResponse);
+        }
+
+        return {
+          rawResponse: `${specialist.displayName} response`,
+          report: `${specialist.displayName} complete`,
+        };
+      },
+    });
+
+    expect(events.find((event) => event.agentId === "orion" && event.type === "approval.requested")).toMatchObject({
+      payload: {
+        blockedAction: "connect to external package registry",
+        rawResponse,
+        requestedSandbox: "danger-full-access",
+      },
+    });
+  });
+
+  it("turns synthesis permission requests into approval events", async () => {
+    const rawResponse = JSON.stringify({
+      permissionRequest: {
+        blockedAction: "write /Users/eunhwa/shared/final.md",
+        reason: "The final output needs to update a file outside the workspace.",
+        sandbox: "danger-full-access",
+      },
+    });
+    const events = await collectCodexEvents("Update a protected final file", {
+      ...workflowFixture(),
+      async synthesize() {
+        return {
+          finalOutput: "I need broader permission before continuing.",
+          rawResponse,
+        };
+      },
+    });
+
+    expect(events.find((event) => event.agentId === "luma" && event.type === "approval.requested")).toMatchObject({
+      payload: {
+        blockedAction: "write /Users/eunhwa/shared/final.md",
+        rawResponse,
+        requestedSandbox: "danger-full-access",
+      },
+    });
+    expect(events.some((event) => event.agentId === "luma" && event.type === "agent.failed")).toBe(false);
+  });
+
+  it("checks synthesis final output for permission requests when raw response is normalized", async () => {
+    const finalOutput = JSON.stringify({
+      permissionRequest: {
+        blockedAction: "write /Users/eunhwa/shared/final.md",
+        reason: "The final output needs to update a file outside the workspace.",
+        sandbox: "danger-full-access",
+      },
+    });
+    const events = await collectCodexEvents("Update a protected final file", {
+      ...workflowFixture(),
+      async synthesize() {
+        return {
+          finalOutput,
+          rawResponse: "I need broader permission before continuing.",
+        };
+      },
+    });
+
+    expect(events.find((event) => event.agentId === "luma" && event.type === "approval.requested")).toMatchObject({
+      payload: {
+        rawResponse: finalOutput,
+        requestedSandbox: "danger-full-access",
+      },
+    });
+  });
+
+  it("preserves unparseable failed output so permission requests can be recovered", () => {
+    const rawResponse = JSON.stringify({
+      permissionRequest: {
+        blockedAction: "connect to external package registry",
+        reason: "The route needs network access outside the current sandbox.",
+        sandbox: "danger-full-access",
+      },
+    });
+    const error = createCodexCliRunErrorFromOutput("Codex CLI exited with code 1", rawResponse);
+
+    expect(error).toBeInstanceOf(CodexCliRunError);
+    expect(error.rawResponse).toBe(rawResponse);
+  });
+
+  it("stops outstanding specialist routes when one route asks for permission", async () => {
+    const abortedSpecialists: string[] = [];
+    const events = await collectCodexEvents("Update a protected file", {
+      ...workflowFixture(),
+      runSpecialist: (specialist, _input, _onProgress, options) => {
+        if (specialist.id === "orion") {
+          return Promise.resolve({
+            rawResponse: JSON.stringify({
+              permissionRequest: {
+                blockedAction: "write /Users/eunhwa/shared/report.md",
+                reason: "The requested file lives outside the current workspace.",
+                sandbox: "danger-full-access",
+              },
+            }),
+            report: JSON.stringify({
+              permissionRequest: {
+                blockedAction: "write /Users/eunhwa/shared/report.md",
+                reason: "The requested file lives outside the current workspace.",
+                sandbox: "danger-full-access",
+              },
+            }),
+          });
+        }
+
+        return new Promise((resolve) => {
+          options?.signal?.addEventListener(
+            "abort",
+            () => {
+              abortedSpecialists.push(specialist.id);
+              resolve({
+                rawResponse: `${specialist.displayName} aborted`,
+                report: `${specialist.displayName} aborted`,
+              });
+            },
+            { once: true },
+          );
+        });
+      },
+    });
+
+    expect(events.find((event) => event.agentId === "orion" && event.type === "approval.requested")).toBeDefined();
+    expect(
+      events
+        .filter((event) => event.type === "agent.paused")
+        .map((event) => event.agentId)
+        .sort(),
+    ).toEqual(["argus", "neria", "quill"]);
+    expect(abortedSpecialists.sort()).toEqual(["argus", "neria", "quill"]);
   });
 
   it("parses the final JSON object from the Codex CLI last-message output", async () => {

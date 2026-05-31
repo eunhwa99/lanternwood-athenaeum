@@ -5,6 +5,7 @@ const eventStatus: Partial<Record<AgentEvent["type"], AgentStatus>> = {
   "agent.planning": "planning",
   "agent.delegated": "planning",
   "agent.moving": "moving",
+  "agent.paused": "waitingApproval",
   "agent.working": "working",
   "agent.reporting": "reporting",
   "agent.reviewing": "reviewing",
