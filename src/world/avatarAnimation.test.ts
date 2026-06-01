@@ -28,6 +28,19 @@ describe("avatar animation", () => {
     );
   });
 
+  it("places specialist reporting targets close enough to read as a Luma handoff", () => {
+    const specialistAgents = AGENTS.filter((agent) => agent.id !== "luma");
+
+    for (const agent of specialistAgents) {
+      const reportPosition = getAgentSceneTarget(agent, "reporting");
+
+      expect(
+        Math.hypot(reportPosition.x - CENTRAL_DESK.x, reportPosition.y - CENTRAL_DESK.y),
+        `${agent.displayName} report handoff distance`,
+      ).toBeLessThan(64);
+    }
+  });
+
   it("returns a walking pose while an avatar is travelling", () => {
     const pose = getAvatarPose("working", 0.25, true);
 

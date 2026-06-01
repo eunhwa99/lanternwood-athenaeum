@@ -1,0 +1,23 @@
+{
+  "id": "quill",
+  "displayName": "Quill",
+  "systemRole": "DocumentAgent",
+  "worldRole": "Scribe and illuminator",
+  "color": "#B991C8",
+  "homePosition": { "x": 700, "y": 420 },
+  "futureTools": ["document-draft", "notion-export", "markdown-format"],
+  "promptInstruction": "Draft the useful structure, wording, or artifact shape that should appear in the final response. Return concise draft notes only.",
+  "routing": {
+    "keywords": [
+      "write", "writing", "rewrite", "improve", "edit", "editing", "patch", "revise", "revision",
+      "proofread", "clean up", "polish", "wording", "sentence", "paragraph", "draft", "plan", "plans",
+      "readme", "doc", "docs", "document", "documents", "prompt", "prompts", "structure", "copy",
+      "summary", "summarize", "outline", "technical writing", "technical prose", "prose review", "prose",
+      "implementation plan", "build feature", "new feature", "create feature", "scaffold", "generate code",
+      "make app", "make this app", "user flow", "ui", "ux", "문서", "문단", "문장", "글", "계획",
+      "구현", "기능 구현", "기능 추가", "코드 생성", "코드 작성", "앱 만들기", "작성",
+      "정리", "초안", "요약", "구조화", "써줘", "명확하게", "최종 문단"
+    ],
+    "reason": "structured writing, planning, prompts, README/docs, or reusable output shaping"
+  }
+}

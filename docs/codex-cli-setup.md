@@ -1,3 +1,5 @@
+codex-cli-setup.md
+
 # Codex CLI Setup
 
 The default `npm run dev` path stays on the mock adapter. Use the Codex CLI path only when you want live Codex runs.
@@ -9,16 +11,25 @@ codex login
 codex doctor
 ```
 
-Run the backend and frontend in separate terminals:
+Run both the backend and frontend together:
 
 ```sh
-npm run dev:codex-api
-npm run dev:codex
+npm run dev:all
 ```
 
-`dev:codex-api` starts the local SSE backend that shells out to `codex exec`. `dev:codex` sets `VITE_RUN_ADAPTER=codex` for that frontend session only, so the safe mock adapter remains the default.
+Or run the backend and frontend in separate terminals:
 
-In Codex mode, Luma starts separate Codex CLI routes for Orion, Neria, Quill, and Argus, then runs a final Luma synthesis route. The Live Run Inspector shows each route's status, streamed raw chunks, final raw response, and verified report.
+```sh
+# Terminal 1
+LANTERNWOOD_CODEX_HEALTH_TOKEN=lanternwood-local-dev npm run dev:codex-api
+
+# Terminal 2
+VITE_LANTERNWOOD_CODEX_REQUEST_TOKEN=lanternwood-local-dev npm run dev:codex
+```
+
+`dev:codex-api` starts the local SSE backend that shells out to `codex exec`. `dev:codex` sets `VITE_RUN_ADAPTER=codex` for that frontend session only, so the safe mock adapter remains the default. The request token keeps browser POST routes scoped to the paired local frontend session; `npm run dev:all` wires it automatically.
+
+In Codex mode, Luma queues the selected specialist Codex CLI routes, tracks each route's status, and runs a final Luma synthesis route once the selected reports are available. The user-facing inspector shows route status, report previews, and task-scoped Luma final output; raw CLI chunks and raw responses remain diagnostic event payloads rather than normal drawer tabs.
 
 Live Codex routes run with `workspace-write` by default. If a route needs broader access, it should return a structured permission request instead of ending the task; the UI shows an approval panel, and an approved retry runs with the requested `danger-full-access` sandbox using a one-use backend approval token.
 

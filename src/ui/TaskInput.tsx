@@ -3,18 +3,21 @@ import type { FormEvent } from "react";
 
 type TaskInputProps = {
   onSubmit: (prompt: string) => void;
+  onStop?: () => void;
   disabled?: boolean;
+  isRunning?: boolean;
 };
 
-export function TaskInput({ onSubmit, disabled = false }: TaskInputProps) {
+export function TaskInput({ onSubmit, onStop, disabled = false, isRunning = false }: TaskInputProps) {
   const [prompt, setPrompt] = useState("Plan my interview prep for this week");
+  const trimmedPrompt = prompt.trim();
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const trimmed = prompt.trim();
 
-    if (trimmed.length > 0) {
-      onSubmit(trimmed);
+    if (trimmedPrompt.length > 0) {
+      onSubmit(trimmedPrompt);
+      setPrompt("");
     }
   }
 
@@ -26,9 +29,16 @@ export function TaskInput({ onSubmit, disabled = false }: TaskInputProps) {
         onChange={(event) => setPrompt(event.target.value)}
         value={prompt}
       />
-      <button disabled={disabled} type="submit">
-        Send to Luma
-      </button>
+      <div className="task-input-actions">
+        <button disabled={disabled} type="submit">
+          Send to Queue
+        </button>
+        {isRunning ? (
+          <button className="task-stop-button" onClick={onStop} type="button">
+            Stop run
+          </button>
+        ) : null}
+      </div>
     </form>
   );
 }

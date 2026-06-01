@@ -5,32 +5,45 @@ describe("mock run adapter", () => {
   it("emits a deterministic manager-led event sequence", async () => {
     const events = [];
 
-    for await (const event of mockRunAdapter.startRun("Plan my interview prep")) {
+    for await (const event of mockRunAdapter.startRun("Review this code and verify risky edge cases")) {
       events.push(event);
     }
 
     expect(events.map((event) => event.type)).toEqual([
       "task.created",
       "agent.planning",
+      "route.planned",
       "agent.delegated",
+      "agent.prompted",
       "agent.working",
       "agent.reporting",
-      "agent.working",
-      "agent.reporting",
-      "agent.working",
-      "agent.reporting",
+      "agent.prompted",
       "agent.reviewing",
       "agent.reporting",
-      "agent.done",
-      "agent.done",
+      "agent.reporting",
       "agent.done",
       "agent.done",
       "agent.done",
     ]);
-    expect(events[0].message).toBe("Plan my interview prep");
-    expect(events[9].message).toBe("Argus checks the answer for risk and gaps");
-    expect(events[10].message).toBe("Luma raises the blue approval lantern");
+    expect(events[0].message).toBe("Review this code and verify risky edge cases");
+    expect(events[2].payload).toMatchObject({
+      confidence: "high",
+      selectedAgentIds: ["orion", "argus"],
+      skippedAgentIds: ["neria", "quill"],
+    });
+    expect(events.filter((event) => event.type === "agent.prompted").map((event) => event.payload?.recipientAgentId)).toEqual([
+      "orion",
+      "argus",
+    ]);
+    expect(
+      events.find((event) => event.type === "agent.prompted" && event.payload?.recipientAgentId === "argus")?.payload,
+    ).toMatchObject({
+      recipientAgentId: "argus",
+      senderAgentId: "luma",
+      speechBubble: "Argus, review the plan for risk and completion criteria.",
+    });
     expect(new Set(events.map((event) => event.taskId)).size).toBe(1);
+    expect(events[0].taskId.length).toBeLessThanOrEqual(32);
   });
 
   it("emits the same event ids for the same input", async () => {
@@ -81,10 +94,10 @@ describe("mock run adapter", () => {
     expect(second[0].eventId).not.toBe(first[0].eventId);
   });
 
-  it("emits terminal done events for participating specialist agents", async () => {
+  it("emits terminal done events only for selected specialist agents", async () => {
     const events = [];
 
-    for await (const event of mockRunAdapter.startRun("Plan my interview prep")) {
+    for await (const event of mockRunAdapter.startRun("Review this code and verify risky edge cases")) {
       events.push(event);
     }
 
@@ -92,7 +105,7 @@ describe("mock run adapter", () => {
       events
         .filter((event) => event.type === "agent.done")
         .map((event) => event.agentId),
-    ).toEqual(["orion", "neria", "quill", "argus", "luma"]);
+    ).toEqual(["orion", "argus", "luma"]);
   });
 
   it("emits a permission request and completes after an approved retry", async () => {
@@ -104,7 +117,7 @@ describe("mock run adapter", () => {
       firstRun.push(event);
     }
 
-    for await (const event of adapter.startRun("Plan my interview prep", { approvalToken: "approval-1", sandbox: "danger-full-access" })) {
+    for await (const event of adapter.startRun("Plan my interview prep", { approvalToken: "approval-1", sandboxMode: "danger-full-access" })) {
       retryRun.push(event);
     }
 

@@ -15,7 +15,7 @@ function event(type: AgentEvent["type"], payload?: AgentEvent["payload"]): Agent
     taskId: "task-1",
     timestamp: "2026-05-31T00:00:00.000Z",
     type,
-  };
+  } as AgentEvent;
 }
 
 function collectSseEvents(text: string): AgentEvent[] {
@@ -66,6 +66,24 @@ describe("Lanternwood Codex server", () => {
 
     return `${baseUrl}/api/runs`;
   }
+
+  it("does not expose the request token through health checks", async () => {
+    const server = createLanternwoodServer({ healthToken: "dev-token" });
+    servers.push(server);
+    const baseUrl = await listen(server);
+
+    const unauthenticatedResponse = await fetch(`${baseUrl}/api/health`);
+
+    expect(unauthenticatedResponse.status).toBe(403);
+    expect(await unauthenticatedResponse.text()).not.toContain("dev-token");
+
+    const authenticatedResponse = await fetch(`${baseUrl}/api/health`, {
+      headers: { "X-Lanternwood-Codex-Token": "dev-token" },
+    });
+
+    expect(authenticatedResponse.status).toBe(200);
+    expect(await authenticatedResponse.json()).toEqual({ ok: true });
+  });
 
   it("rejects cross-site run requests before starting Codex execution", async () => {
     const createEvents = vi.fn(async function* () {
@@ -135,7 +153,7 @@ describe("Lanternwood Codex server", () => {
     const endpoint = await startServer(createEvents);
 
     const response = await fetch(endpoint, {
-      body: JSON.stringify({ input: "Draft a plan", sandbox: "danger-full-access" }),
+      body: JSON.stringify({ input: "Draft a plan", sandboxMode: "danger-full-access" }),
       headers: {
         "Content-Type": "application/json",
         Origin: allowedOrigin,
@@ -148,10 +166,45 @@ describe("Lanternwood Codex server", () => {
     expect(createEvents).not.toHaveBeenCalled();
   });
 
+  it("rejects invalid queued agent-job requests before starting SSE", async () => {
+    const createAgentJobEvents = vi.fn(async function* () {
+      yield event("agent.done");
+    });
+    const server = createLanternwoodServer({ createAgentJobEvents });
+    servers.push(server);
+    const baseUrl = await listen(server);
+
+    const response = await fetch(`${baseUrl}/api/agent-jobs`, {
+      body: JSON.stringify({ input: "Draft a plan", taskId: "task-1" }),
+      headers: {
+        "Content-Type": "application/json",
+        Origin: allowedOrigin,
+      },
+      method: "POST",
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe("Missing or invalid agentId");
+    expect(createAgentJobEvents).not.toHaveBeenCalled();
+
+    const unknownAgentResponse = await fetch(`${baseUrl}/api/agent-jobs`, {
+      body: JSON.stringify({ agentId: "not-real-agent", input: "Draft a plan", taskId: "task-1" }),
+      headers: {
+        "Content-Type": "application/json",
+        Origin: allowedOrigin,
+      },
+      method: "POST",
+    });
+
+    expect(unknownAgentResponse.status).toBe(400);
+    expect(await unknownAgentResponse.text()).toBe("Missing or invalid agentId");
+    expect(createAgentJobEvents).not.toHaveBeenCalled();
+  });
+
   it("injects one-use approval tokens and accepts an approved danger-full-access retry", async () => {
     const createEvents = vi.fn(async function* (_input, _workflow, options) {
-      if (options?.sandbox === "danger-full-access") {
-        yield event("agent.done", { sandbox: options.sandbox });
+      if (options?.sandboxMode === "danger-full-access") {
+        yield event("agent.done", { sandboxMode: options.sandboxMode });
         return;
       }
 
@@ -180,9 +233,11 @@ describe("Lanternwood Codex server", () => {
 
     const retryResponse = await fetch(endpoint, {
       body: JSON.stringify({
+        approvalAgentId: "luma",
         approvalToken,
         input: "Draft a plan",
-        sandbox: "danger-full-access",
+        sandboxMode: "danger-full-access",
+        taskId: "task-1",
       }),
       headers: {
         "Content-Type": "application/json",
@@ -194,21 +249,23 @@ describe("Lanternwood Codex server", () => {
     expect(retryResponse.status).toBe(200);
     expect(collectSseEvents(await retryResponse.text())[0]).toMatchObject({
       payload: {
-        sandbox: "danger-full-access",
+        sandboxMode: "danger-full-access",
       },
       type: "agent.done",
     });
     expect(createEvents).toHaveBeenLastCalledWith(
       "Draft a plan",
       undefined,
-      expect.objectContaining({ sandbox: "danger-full-access" }),
+      expect.objectContaining({ sandboxMode: "danger-full-access" }),
     );
 
     const reusedTokenResponse = await fetch(endpoint, {
       body: JSON.stringify({
+        approvalAgentId: "luma",
         approvalToken,
         input: "Draft a plan",
-        sandbox: "danger-full-access",
+        sandboxMode: "danger-full-access",
+        taskId: "task-1",
       }),
       headers: {
         "Content-Type": "application/json",
@@ -218,5 +275,107 @@ describe("Lanternwood Codex server", () => {
     });
 
     expect(reusedTokenResponse.status).toBe(403);
+  });
+
+  it("rejects approved danger-full-access retries with the wrong approval scope", async () => {
+    const createEvents = vi.fn(async function* () {
+      yield event("approval.requested", {
+        reason: "Need broader access.",
+        requestedSandbox: "danger-full-access",
+      });
+    });
+    const endpoint = await startServer(createEvents);
+
+    const firstResponse = await fetch(endpoint, {
+      body: JSON.stringify({ input: "Draft a plan" }),
+      headers: {
+        "Content-Type": "application/json",
+        Origin: allowedOrigin,
+      },
+      method: "POST",
+    });
+    const approvalToken = collectSseEvents(await firstResponse.text())[0].payload?.approvalToken;
+
+    const wrongTaskResponse = await fetch(endpoint, {
+      body: JSON.stringify({
+        approvalAgentId: "luma",
+        approvalToken,
+        input: "Draft a plan",
+        sandboxMode: "danger-full-access",
+        taskId: "task-2",
+      }),
+      headers: {
+        "Content-Type": "application/json",
+        Origin: allowedOrigin,
+      },
+      method: "POST",
+    });
+
+    expect(wrongTaskResponse.status).toBe(403);
+
+    const wrongAgentResponse = await fetch(endpoint, {
+      body: JSON.stringify({
+        approvalAgentId: "orion",
+        approvalToken,
+        input: "Draft a plan",
+        sandboxMode: "danger-full-access",
+        taskId: "task-1",
+      }),
+      headers: {
+        "Content-Type": "application/json",
+        Origin: allowedOrigin,
+      },
+      method: "POST",
+    });
+
+    expect(wrongAgentResponse.status).toBe(403);
+  });
+
+  it("rejects approval tokens on the wrong Codex route", async () => {
+    const createAgentJobEvents = vi.fn(async function* () {
+      yield event("approval.requested", {
+        reason: "Need broader access.",
+        requestedSandbox: "danger-full-access",
+      });
+    });
+    const createEvents = vi.fn(async function* () {
+      yield event("agent.done");
+    });
+    const server = createLanternwoodServer({ createAgentJobEvents, createEvents });
+    servers.push(server);
+    const baseUrl = await listen(server);
+
+    const firstResponse = await fetch(`${baseUrl}/api/agent-jobs`, {
+      body: JSON.stringify({
+        agentId: "orion",
+        input: "Draft a plan",
+        selectedAgentIds: ["orion"],
+        taskId: "task-1",
+      }),
+      headers: {
+        "Content-Type": "application/json",
+        Origin: allowedOrigin,
+      },
+      method: "POST",
+    });
+    const approvalToken = collectSseEvents(await firstResponse.text())[0].payload?.approvalToken;
+
+    const wrongRouteResponse = await fetch(`${baseUrl}/api/runs`, {
+      body: JSON.stringify({
+        approvalAgentId: "orion",
+        approvalToken,
+        input: "Draft a plan",
+        sandboxMode: "danger-full-access",
+        taskId: "task-1",
+      }),
+      headers: {
+        "Content-Type": "application/json",
+        Origin: allowedOrigin,
+      },
+      method: "POST",
+    });
+
+    expect(wrongRouteResponse.status).toBe(403);
+    expect(createEvents).not.toHaveBeenCalled();
   });
 });

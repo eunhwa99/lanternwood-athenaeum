@@ -21,11 +21,15 @@ describe("approval gate", () => {
 
   it("allows a broader sandbox once with a matching approval token", () => {
     const gate = new ApprovalGate();
-    const token = gate.createApproval("Draft a plan", "danger-full-access");
+    const token = gate.createApproval("Draft a plan", "danger-full-access", { agentId: "orion", taskId: "task-1" });
 
     expect(token).toEqual(expect.stringMatching(/^approval-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/));
-    expect(gate.approveRequest("Different task", "danger-full-access", token).ok).toBe(false);
-    expect(gate.approveRequest("Draft a plan", "danger-full-access", token)).toEqual({ ok: true });
-    expect(gate.approveRequest("Draft a plan", "danger-full-access", token).ok).toBe(false);
+    expect(gate.approveRequest("Different task", "danger-full-access", token, { agentId: "orion", taskId: "task-1" }).ok).toBe(false);
+    expect(gate.approveRequest("Draft a plan", "danger-full-access", token, { agentId: "argus", taskId: "task-1" }).ok).toBe(false);
+    expect(gate.approveRequest("Draft a plan", "danger-full-access", token, { agentId: "orion", taskId: "task-2" }).ok).toBe(false);
+    expect(gate.approveRequest("Draft a plan", "danger-full-access", token, { agentId: "orion", taskId: "task-1" })).toEqual({
+      ok: true,
+    });
+    expect(gate.approveRequest("Draft a plan", "danger-full-access", token, { agentId: "orion", taskId: "task-1" }).ok).toBe(false);
   });
 });
