@@ -12,22 +12,24 @@ import type { AgentId } from "../agents/types";
    type TaskRecord,
  } from "../events/types";
  import { createCodexRunAdapter } from "../harness/codexRunAdapter";
- import { createMockRunAdapter } from "../harness/mockRunAdapter";
+ import { createMockApprovalRunAdapter, createMockRunAdapter } from "../harness/mockRunAdapter";
  import type { RunAdapter, RunAdapterOptions } from "../harness/runAdapter";
  import { createTaskId } from "../harness/taskIds";
  import { LanternwoodScene } from "../world/LanternwoodScene";
  import { LiveRunInspector } from "./LiveRunInspector";
  import { RunDetailDrawer } from "./RunDetailDrawer";
- import { TaskInput } from "./TaskInput";
- import { previewText } from "./runDetails";
+import { TaskInput } from "./TaskInput";
+import { latestPermissionRequest, type PermissionRequestView } from "./permissionRequests";
+import { previewText } from "./runDetails";
  import type { RunDetailsTab } from "./runDetails";
  import { useQueuedRunOrchestrator } from "./useQueuedRunOrchestrator";
 
- declare global {
-   interface Window {
-     __LANTERNWOOD_EVENT_DELAY_MS__?: number;
-   }
- }
+	 declare global {
+	   interface Window {
+	     __LANTERNWOOD_APPROVAL_TEST_FLOW__?: boolean;
+	     __LANTERNWOOD_EVENT_DELAY_MS__?: number;
+	   }
+	 }
 
  function getVisibleEventDelayMs() {
    if (typeof window !== "undefined" && Number.isFinite(window.__LANTERNWOOD_EVENT_DELAY_MS__)) {
@@ -40,12 +42,16 @@ import type { AgentId } from "../agents/types";
  const visibleMockRunAdapter = createMockRunAdapter({ eventDelayMs: getVisibleEventDelayMs() });
 
  function createDefaultRunAdapter() {
-   if (import.meta.env.VITE_RUN_ADAPTER === "codex") {
-     return createCodexRunAdapter({ requestToken: import.meta.env.VITE_LANTERNWOOD_CODEX_REQUEST_TOKEN });
-   }
+	   if (import.meta.env.VITE_RUN_ADAPTER === "codex") {
+	     return createCodexRunAdapter({ requestToken: import.meta.env.VITE_LANTERNWOOD_CODEX_REQUEST_TOKEN });
+	   }
 
-   return visibleMockRunAdapter;
- }
+	   if (typeof window !== "undefined" && window.__LANTERNWOOD_APPROVAL_TEST_FLOW__ === true) {
+	     return createMockApprovalRunAdapter({ eventDelayMs: getVisibleEventDelayMs() });
+	   }
+
+	   return visibleMockRunAdapter;
+	 }
 
  type AppShellProps = {
    runAdapter?: RunAdapter;
@@ -224,14 +230,37 @@ import type { AgentId } from "../agents/types";
    );
  }
 
- function supportsQueuedRuns(runAdapter: RunAdapter): runAdapter is RunAdapter & {
-   startAgentJob: NonNullable<RunAdapter["startAgentJob"]>;
-   synthesizeTask: NonNullable<RunAdapter["synthesizeTask"]>;
- } {
-   return typeof runAdapter.startAgentJob === "function" && typeof runAdapter.synthesizeTask === "function";
- }
+	 function supportsQueuedRuns(runAdapter: RunAdapter): runAdapter is RunAdapter & {
+	   startAgentJob: NonNullable<RunAdapter["startAgentJob"]>;
+	   synthesizeTask: NonNullable<RunAdapter["synthesizeTask"]>;
+	 } {
+	   return typeof runAdapter.startAgentJob === "function" && typeof runAdapter.synthesizeTask === "function";
+	 }
 
- function isTaskInFlight(task: TaskRecord) {
+	 function PermissionRequestPanel({
+	   disabled,
+	   onApprove,
+	   request,
+	 }: {
+	   disabled: boolean;
+	   onApprove: (request: PermissionRequestView) => void;
+	   request: PermissionRequestView;
+	 }) {
+	   return (
+	     <section className="permission-request-panel" aria-label="Permission request">
+	       <div>
+	         <h2>{request.agentName} requests {request.requestedSandbox}</h2>
+	         <p>{request.reason}</p>
+	         {request.blockedAction ? <p className="permission-blocked-action">{request.blockedAction}</p> : null}
+	       </div>
+	       <button disabled={disabled} onClick={() => onApprove(request)} type="button">
+	         Approve and retry
+	       </button>
+	     </section>
+	   );
+	 }
+
+	 function isTaskInFlight(task: TaskRecord) {
    return !["done", "failed"].includes(task.status);
  }
 
@@ -944,7 +973,7 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
   const [workspaceDiscoveryStatus, setWorkspaceDiscoveryStatus] = useState("Loading workspaces");
   const [workspaceSearch, setWorkspaceSearch] = useState("");
   const [recentWorkspaces, setRecentWorkspaces] = useState<WorkspaceOption[]>(readRecentWorkspaces);
-  const [allowWorkspaceWrite, setAllowWorkspaceWrite] = useState(false);
+  const [allowWorkspaceWrite, setAllowWorkspaceWrite] = useState(true);
   const [workspaceMetadata, setWorkspaceMetadata] = useState<WorkspaceMetadata | null>(null);
   const [workspaceContextStatus, setWorkspaceContextStatus] = useState("Not inspected");
   const [discoveredSkills, setDiscoveredSkills] = useState<CodexSkillSummary[]>([]);
@@ -958,7 +987,7 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
    const taskEventsRef = useRef<Map<string, AgentEvent[]>>(new Map());
    const previousRunRef = useRef<PreviousRunContext | null>(null);
    const queuedRunAdapter = supportsQueuedRuns(runAdapter) ? runAdapter : null;
-   const { queueRun, stopQueuedRuns } = useQueuedRunOrchestrator({
+	   const { approveQueuedRequest, queueRun, stopQueuedRuns } = useQueuedRunOrchestrator({
      commitEvent,
      getPreviousRun: () => previousRunRef.current,
      getRunState: () => runStateRef.current,
@@ -969,10 +998,11 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
      queuedRunAdapter,
      setRunStateSynced,
    });
-   const hasQueuedWork =
-     runState.tasks.some(isTaskInFlight) ||
-     Object.values(runState.agentQueues).some((jobs) => jobs.some((job) => job.status === "queued" || job.status === "running"));
-   const inputIsRunning = isRunning || hasQueuedWork;
+  const hasQueuedWork =
+    runState.tasks.some(isTaskInFlight) ||
+    Object.values(runState.agentQueues).some((jobs) => jobs.some((job) => job.status === "queued" || job.status === "running"));
+  const inputIsRunning = isRunning || hasQueuedWork;
+  const permissionRequest = latestPermissionRequest(runState);
 
   const pinnedWorkspaces = useMemo(() => {
     const selected = new Map<string, WorkspaceOption>();
@@ -1107,7 +1137,10 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
      }
    }
 
-   async function startRun(prompt: string) {
+   async function startRun(
+     prompt: string,
+     runOptions: Pick<RunAdapterOptions, "approvalAgentId" | "approvalToken" | "sandboxMode" | "taskId" | "workspacePath"> = {},
+   ) {
      const runToken = Symbol("run");
      activeRunRef.current = runToken;
      const nextInitialState = createInitialRunState(AGENTS);
@@ -1119,17 +1152,21 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
      const abortController = new AbortController();
      abortControllerRef.current = abortController;
      let taskId = createTaskId(prompt);
+     const workspacePath = Object.hasOwn(runOptions, "workspacePath") ? runOptions.workspacePath : selectedWorkspacePath();
      let sawTaskCreated = false;
      const runEvents: AgentEvent[] = [];
      let finalOutput: string | null = null;
 
-     try {
-     for await (const event of runAdapter.startRun(prompt, {
-       previousRun: previousRunRef.current ?? undefined,
-       sandboxMode: selectedSandboxMode(),
-       signal: abortController.signal,
-       workspacePath: selectedWorkspacePath(),
-     })) {
+	     try {
+	     for await (const event of runAdapter.startRun(prompt, {
+	       approvalAgentId: runOptions.approvalAgentId,
+	       approvalToken: runOptions.approvalToken,
+	       previousRun: previousRunRef.current ?? undefined,
+	       sandboxMode: runOptions.sandboxMode ?? selectedSandboxMode(),
+	       signal: abortController.signal,
+	       taskId: runOptions.taskId,
+	       workspacePath,
+	     })) {
          if (activeRunRef.current !== runToken) {
            return;
          }
@@ -1146,12 +1183,14 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
          }
          setRunStateSynced((current) => {
            const next = reduceAgentEvent(current, event);
+           const nextWithWorkspace =
+             event.type === "task.created" && workspacePath ? updateTask(next, event.taskId, { workspacePath }) : next;
 
            if (event.agentId === "luma" && event.type === "agent.failed") {
-             return failUnfinishedSpecialists(next, event.taskId, "Route closed after Luma reported a run failure");
+             return failUnfinishedSpecialists(nextWithWorkspace, event.taskId, "Route closed after Luma reported a run failure");
            }
 
-           return next;
+           return nextWithWorkspace;
          });
        }
 
@@ -1369,13 +1408,35 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
                Refresh workspaces
              </button>
            </div>
-         </section>
-         <WorkspaceContextPanel metadata={workspaceMetadata} status={workspaceContextStatus} />
-         <RunResultsPanel metadata={workspaceMetadata} />
-         <SkillDiscoveryPanel prompt={runState.tasks.at(-1)?.prompt ?? ""} skills={discoveredSkills} />
-         <AgentLibraryPanel />
-         <TaskInput disabled={!queuedRunAdapter && inputIsRunning} isRunning={inputIsRunning} onStop={stopRun} onSubmit={submitTask} />
-         <WorkQueuePanel
+	         </section>
+	         <WorkspaceContextPanel metadata={workspaceMetadata} status={workspaceContextStatus} />
+	         <RunResultsPanel metadata={workspaceMetadata} />
+	         <SkillDiscoveryPanel prompt={runState.tasks.at(-1)?.prompt ?? ""} skills={discoveredSkills} />
+	         <AgentLibraryPanel />
+	         <TaskInput disabled={!queuedRunAdapter && inputIsRunning} isRunning={inputIsRunning} onStop={stopRun} onSubmit={submitTask} />
+	         {permissionRequest ? (
+	           <PermissionRequestPanel
+	             disabled={isRunning}
+	             onApprove={(request) => {
+	               setAllowWorkspaceWrite(true);
+	               if (
+	                 queuedRunAdapter &&
+	                 approveQueuedRequest(request.taskId, request.agentId, request.requestedSandbox, request.approvalToken)
+	               ) {
+	                 return;
+	               }
+	               void startRun(request.prompt, {
+	                 approvalAgentId: request.agentId,
+	                 approvalToken: request.approvalToken,
+	                 sandboxMode: request.requestedSandbox,
+	                 taskId: request.taskId,
+	                 workspacePath: request.workspacePath,
+	               });
+	             }}
+	             request={permissionRequest}
+	           />
+	         ) : null}
+	         <WorkQueuePanel
            onOpenFinalOutput={(taskId) => {
              const task = runState.tasks.find((candidate) => candidate.taskId === taskId);
              const hasReports = runState.timeline.some((event) => event.taskId === taskId && event.type === "agent.reporting");

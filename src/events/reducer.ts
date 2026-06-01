@@ -6,6 +6,7 @@ const eventStatus: Partial<Record<AgentEvent["type"], AgentStatus>> = {
   "agent.delegated": "planning",
   "agent.prompted": "moving",
   "agent.moving": "moving",
+  "agent.paused": "waitingApproval",
   "agent.working": "working",
   "agent.reporting": "reporting",
   "agent.reviewing": "reviewing",
@@ -59,6 +60,7 @@ export function enqueueTask(
     selectedAgentIds?: AgentId[];
     skippedAgentIds?: AgentId[];
     taskId: string;
+    workspacePath?: string;
   },
 ): RunState {
   const nextTask: TaskRecord = {
@@ -69,6 +71,7 @@ export function enqueueTask(
     skippedAgentIds: task.skippedAgentIds ?? [],
     status: "queued",
     taskId: task.taskId,
+    workspacePath: task.workspacePath,
   };
 
   return {
@@ -183,6 +186,7 @@ export function reduceAgentEvent(state: RunState, event: AgentEvent): RunState {
           skippedAgentIds: existingEventTask?.skippedAgentIds ?? [],
           status: "routing",
           taskId: event.taskId,
+          workspacePath: existingEventTask?.workspacePath,
         })
       : isTerminalManagerEvent && typeof event.payload?.finalOutput === "string"
         ? upsertTask(state.tasks, {
@@ -194,6 +198,7 @@ export function reduceAgentEvent(state: RunState, event: AgentEvent): RunState {
             skippedAgentIds: existingEventTask?.skippedAgentIds ?? [],
             status: "done",
             taskId: event.taskId,
+            workspacePath: existingEventTask?.workspacePath,
           })
         : event.type === "agent.failed" && event.agentId === "luma"
           ? upsertTask(state.tasks, {
@@ -206,6 +211,7 @@ export function reduceAgentEvent(state: RunState, event: AgentEvent): RunState {
               skippedAgentIds: existingEventTask?.skippedAgentIds ?? [],
               status: "failed",
               taskId: event.taskId,
+              workspacePath: existingEventTask?.workspacePath,
             })
           : state.tasks;
   const nextFinalOutputs =

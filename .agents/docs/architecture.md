@@ -15,4 +15,4 @@ Rules:
 - `src/harness/mockRunAdapter.ts` is the first run source.
 - Future live-run work must implement the same `RunAdapter` interface.
 - The current live-run path is Codex CLI through `src/harness/codexRunAdapter.ts` and the local SSE backend.
-- Side-effecting tools must require explicit approval before execution.
+- Live Codex routes default to `workspace-write`; broader `danger-full-access` execution must come from a structured permission request, backend approval token, and explicit user retry.

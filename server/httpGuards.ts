@@ -10,6 +10,7 @@ type GuardInput = {
   allowedOrigins?: readonly string[];
   contentType?: string;
   expectedToken?: string;
+  fetchSite?: string;
   origin?: string;
   token?: string;
 };
@@ -63,6 +64,7 @@ export function validateCodexPostRequest({
   allowedOrigins,
   contentType,
   expectedToken,
+  fetchSite,
   origin,
   token,
 }: GuardInput): GuardResult {
@@ -71,6 +73,10 @@ export function validateCodexPostRequest({
   }
 
   if (!isAllowedDashboardOrigin(origin, allowedOrigins)) {
+    return { message: "Forbidden origin", ok: false, status: 403 };
+  }
+
+  if (fetchSite === "cross-site") {
     return { message: "Forbidden origin", ok: false, status: 403 };
   }
 

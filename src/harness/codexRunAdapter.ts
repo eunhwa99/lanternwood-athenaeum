@@ -153,13 +153,16 @@ export function createCodexRunAdapter({
         fetchImpl,
         endpoint,
         {
+          ...(options.approvalAgentId ? { approvalAgentId: options.approvalAgentId } : {}),
           input,
+          ...(options.approvalToken ? { approvalToken: options.approvalToken } : {}),
           ...(options.previousRun ? { previousRun: options.previousRun } : {}),
           ...(options.sandboxMode ? { sandboxMode: options.sandboxMode } : {}),
+          ...(options.taskId ? { taskId: options.taskId } : {}),
           ...(options.workspacePath ? { workspacePath: options.workspacePath } : {}),
         },
         options,
-        (event) => event.agentId === "luma" && (event.type === "agent.done" || event.type === "agent.failed"),
+        (event) => event.type === "approval.requested" || (event.agentId === "luma" && (event.type === "agent.done" || event.type === "agent.failed")),
         requestToken,
       );
     },
@@ -170,6 +173,7 @@ export function createCodexRunAdapter({
         resolvedAgentJobEndpoint,
         {
           agentId: job.agentId,
+          ...(options.approvalToken ? { approvalToken: options.approvalToken } : {}),
           delegatedPrompt: job.delegatedPrompt,
           input: job.prompt,
           ...(options.previousRun ? { previousRun: options.previousRun } : {}),
@@ -181,7 +185,7 @@ export function createCodexRunAdapter({
           ...(options.workspacePath ? { workspacePath: options.workspacePath } : {}),
         },
         options,
-        (event) => (event.agentId === job.agentId && event.type === "agent.reporting") || event.type === "agent.failed",
+        (event) => event.type === "approval.requested" || (event.agentId === job.agentId && event.type === "agent.reporting") || event.type === "agent.failed",
         requestToken,
       );
     },
@@ -191,6 +195,7 @@ export function createCodexRunAdapter({
         fetchImpl,
         resolvedSynthesisEndpoint,
         {
+          ...(options.approvalToken ? { approvalToken: options.approvalToken } : {}),
           input: task.prompt,
           ...(options.previousRun ? { previousRun: options.previousRun } : {}),
           ...(options.sandboxMode ? { sandboxMode: options.sandboxMode } : {}),
@@ -201,7 +206,7 @@ export function createCodexRunAdapter({
           ...(options.workspacePath ? { workspacePath: options.workspacePath } : {}),
         },
         options,
-        (event) => event.agentId === "luma" && (event.type === "agent.done" || event.type === "agent.failed"),
+        (event) => event.type === "approval.requested" || (event.agentId === "luma" && (event.type === "agent.done" || event.type === "agent.failed")),
         requestToken,
       );
     },

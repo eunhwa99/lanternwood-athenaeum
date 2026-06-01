@@ -176,7 +176,7 @@ export function createMockRunAdapter(options: MockRunAdapterOptions = {}): RunAd
         index += agentEvents.length;
       }
 
-      events.push(event(taskId, index++, "luma", "approval.requested", "Luma raises the blue approval lantern"));
+      events.push(event(taskId, index++, "luma", "agent.reporting", "Luma raises the blue approval lantern"));
 
       for (const agentId of routePlan.selectedAgentIds) {
         events.push(event(taskId, index++, agentId, "agent.done", `${agentDisplayName(agentId)} returns to their alcove`));
@@ -203,7 +203,7 @@ export function createMockRunAdapter(options: MockRunAdapterOptions = {}): RunAd
     async *synthesizeTask(task: SynthesisTaskRequest, runOptions: RunAdapterOptions = {}) {
       const events: AgentEvent[] = [];
       let index = 80;
-      events.push(event(task.taskId, index++, "luma", "approval.requested", "Luma raises the blue approval lantern"));
+      events.push(event(task.taskId, index++, "luma", "agent.reporting", "Luma raises the blue approval lantern"));
 
       for (const agentId of task.selectedAgentIds) {
         events.push(event(task.taskId, index++, agentId, "agent.done", `${agentDisplayName(agentId)} returns to their alcove`));
@@ -217,6 +217,75 @@ export function createMockRunAdapter(options: MockRunAdapterOptions = {}): RunAd
             : "This request is simple enough for Luma to answer directly without specialist routing.",
         }),
       );
+
+      yield* yieldWithDelay(events, eventDelayMs, runOptions.signal);
+    },
+  };
+}
+
+export function createMockApprovalRunAdapter(options: MockRunAdapterOptions = {}): RunAdapter {
+  const eventDelayMs = options.eventDelayMs ?? 0;
+  const approved = (runOptions: RunAdapterOptions) =>
+    runOptions.sandboxMode === "danger-full-access" && runOptions.approvalToken === "approval-1";
+
+  return {
+    async *startRun(input: string, runOptions: RunAdapterOptions = {}) {
+      const taskId = runOptions.taskId ?? createTaskId(input);
+      const events: AgentEvent[] =
+        approved(runOptions)
+          ? [
+              event(taskId, 1, "luma", "task.created", input),
+              event(taskId, 2, "luma", "agent.done", "Luma places the final summary on the central desk", {
+                finalOutput: "Approved retry completed with danger-full-access.",
+              }),
+            ]
+          : [
+              event(taskId, 1, "luma", "task.created", input),
+              event(taskId, 2, "orion", "approval.requested", "Orion requests danger-full-access permission: Needs a file outside the workspace.", {
+                approvalToken: "approval-1",
+                blockedAction: "write /Users/eunhwa/shared/report.md",
+                reason: "Needs a file outside the workspace.",
+                requestedSandbox: "danger-full-access",
+              }),
+            ];
+
+      yield* yieldWithDelay(events, eventDelayMs, runOptions.signal);
+    },
+
+    async *startAgentJob(job: AgentJobRequest, runOptions: RunAdapterOptions = {}) {
+      const events: AgentEvent[] = approved(runOptions)
+        ? [
+            event(job.taskId, specialistEventIndex(job.agentId), job.agentId, "agent.reporting", `${agentDisplayName(job.agentId)} returns approved notes`, {
+              report: "Approved specialist retry completed with danger-full-access.",
+              reportExcerpt: "Approved specialist retry completed with danger-full-access.",
+              speechBubble: "Approved specialist retry completed with danger-full-access.",
+            }),
+          ]
+        : [
+            event(
+              job.taskId,
+              specialistEventIndex(job.agentId),
+              job.agentId,
+              "approval.requested",
+              `${agentDisplayName(job.agentId)} requests danger-full-access permission: Needs a file outside the workspace.`,
+              {
+                approvalToken: "approval-1",
+                blockedAction: "write /Users/eunhwa/shared/report.md",
+                reason: "Needs a file outside the workspace.",
+                requestedSandbox: "danger-full-access",
+              },
+            ),
+          ];
+
+      yield* yieldWithDelay(events, eventDelayMs, runOptions.signal);
+    },
+
+    async *synthesizeTask(task: SynthesisTaskRequest, runOptions: RunAdapterOptions = {}) {
+      const events: AgentEvent[] = [
+        event(task.taskId, 80, "luma", "agent.done", "Luma places the final summary on the central desk", {
+          finalOutput: "Approved retry completed with danger-full-access.",
+        }),
+      ];
 
       yield* yieldWithDelay(events, eventDelayMs, runOptions.signal);
     },

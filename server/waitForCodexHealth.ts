@@ -10,10 +10,12 @@ const url = `http://127.0.0.1:${port}/api/health`;
 async function waitForHealth() {
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(url);
-      const body = (await response.json().catch(() => undefined)) as { token?: unknown } | undefined;
+      const response = await fetch(url, {
+        headers: expectedToken ? { "X-Lanternwood-Codex-Token": expectedToken } : undefined,
+      });
+      const body = (await response.json().catch(() => undefined)) as { ok?: unknown } | undefined;
 
-      if (response.ok && (!expectedToken || body?.token === expectedToken)) {
+      if (response.ok && body?.ok === true) {
         return;
       }
     } catch {

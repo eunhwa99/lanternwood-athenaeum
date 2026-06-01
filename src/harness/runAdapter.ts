@@ -1,9 +1,12 @@
 import type { AgentId } from "../agents/types";
 import type { AgentEvent, PreviousRunContext, SpecialistAgentId } from "../events/types";
+import type { SandboxMode } from "./permissions";
 
 export type RunAdapterOptions = {
+  approvalAgentId?: AgentId;
+  approvalToken?: string;
   previousRun?: PreviousRunContext;
-  sandboxMode?: "read-only" | "workspace-write";
+  sandboxMode?: SandboxMode;
   signal?: AbortSignal;
   taskId?: string;
   workspacePath?: string;

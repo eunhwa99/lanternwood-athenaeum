@@ -31,6 +31,8 @@ VITE_LANTERNWOOD_CODEX_REQUEST_TOKEN=lanternwood-local-dev npm run dev:codex
 
 In Codex mode, Luma queues the selected specialist Codex CLI routes, tracks each route's status, and runs a final Luma synthesis route once the selected reports are available. The user-facing inspector shows route status, report previews, and task-scoped Luma final output; raw CLI chunks and raw responses remain diagnostic event payloads rather than normal drawer tabs.
 
+Live Codex routes run with `workspace-write` by default. If a route needs broader access, it should return a structured permission request instead of ending the task; the UI shows an approval panel, and an approved retry runs with the requested `danger-full-access` sandbox using a one-use backend approval token.
+
 Optional local `.env` values:
 
 ```sh

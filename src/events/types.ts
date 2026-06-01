@@ -11,6 +11,7 @@ export type AgentEventType =
   | "agent.delegated"
   | "agent.prompted"
   | "agent.moving"
+  | "agent.paused"
   | "agent.working"
   | "agent.reporting"
   | "agent.reviewing"
@@ -26,6 +27,7 @@ export const AGENT_EVENT_TYPES = [
   "agent.delegated",
   "agent.prompted",
   "agent.moving",
+  "agent.paused",
   "agent.working",
   "agent.reporting",
   "agent.reviewing",
@@ -128,6 +130,7 @@ export type TaskRecord = {
   skippedAgentIds: AgentId[];
   status: TaskStatus;
   taskId: string;
+  workspacePath?: string;
 };
 
 export type AgentJob = {

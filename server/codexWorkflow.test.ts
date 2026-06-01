@@ -61,7 +61,7 @@ describe("codex cli workflow", () => {
       codexStatus: "calling",
       runMode: "codex",
     });
-    expect(events.find((event) => event.agentId === "orion" && event.type === "agent.reporting")?.payload).toEqual({
+    expect(events.find((event) => event.agentId === "orion" && event.type === "agent.reporting")?.payload).toMatchObject({
       backend: "connected",
       cliCommand: "codex exec",
       codexStatus: "completed",
@@ -146,7 +146,7 @@ describe("codex cli workflow", () => {
       workflowFixture({ finalOutput: "Queued final", rawResponse: "Queued raw" }),
     );
 
-    expect(events.map((event) => event.type)).toEqual(["agent.working", "approval.requested", "agent.done", "agent.done"]);
+    expect(events.map((event) => event.type)).toEqual(["agent.working", "agent.reporting", "agent.done", "agent.done"]);
     expect(events.at(-1)).toMatchObject({
       agentId: "luma",
       payload: {
@@ -448,7 +448,7 @@ describe("codex cli workflow", () => {
         };
       },
     });
-    const reportOrder = events.filter((event) => event.type === "agent.reporting").map((event) => event.agentId);
+    const reportOrder = events.filter((event) => event.type === "agent.reporting" && event.agentId !== "luma").map((event) => event.agentId);
     const promptOrder = events.filter((event) => event.type === "agent.prompted").map((event) => event.payload?.recipientAgentId);
 
     expect(promptOrder).toEqual(["orion", "neria", "quill", "argus"]);
@@ -555,6 +555,146 @@ describe("codex cli workflow", () => {
     });
 
     expect(seenSandboxModes).toContain("workspace-write");
+  });
+
+  it("scopes approved sandbox mode to the requesting agent during full-run retries", async () => {
+    const seenSandboxModes: Array<{ agentId: string; sandboxMode?: string }> = [];
+    const workflow: CodexWorkflowExecutors = {
+      async runSpecialist(specialist, _input, _onProgress, options) {
+        seenSandboxModes.push({ agentId: specialist.id, sandboxMode: options?.sandboxMode });
+
+        return {
+          rawResponse: `${specialist.displayName} response`,
+          report: `${specialist.displayName} complete`,
+        };
+      },
+      async synthesize(_input, _reports, _onProgress, options) {
+        seenSandboxModes.push({ agentId: "luma", sandboxMode: options?.sandboxMode });
+
+        return {
+          finalOutput: "Scoped sandbox answer",
+          rawResponse: "Scoped sandbox answer",
+        };
+      },
+    };
+
+    await collectCodexEvents(fullRouteInput, workflow, {
+      approvalAgentId: "orion",
+      sandboxMode: "danger-full-access",
+    });
+
+    expect(seenSandboxModes).toContainEqual({ agentId: "orion", sandboxMode: "danger-full-access" });
+    expect(seenSandboxModes.filter((entry) => entry.agentId !== "orion")).toEqual(
+      expect.arrayContaining([
+        { agentId: "neria", sandboxMode: "workspace-write" },
+        { agentId: "quill", sandboxMode: "workspace-write" },
+        { agentId: "argus", sandboxMode: "workspace-write" },
+        { agentId: "luma", sandboxMode: "workspace-write" },
+      ]),
+    );
+  });
+
+  it("pauses orchestration when a specialist asks for broader sandbox permission", async () => {
+    const events = await collectCodexEvents(fullRouteInput, {
+      ...workflowFixture(),
+      async runSpecialist(specialist) {
+        if (specialist.id === "orion") {
+          return {
+            rawResponse: JSON.stringify({
+              permissionRequest: {
+                blockedAction: "write /Users/eunhwa/shared/report.md",
+                reason: "Needs a file outside the workspace.",
+                sandbox: "danger-full-access",
+              },
+            }),
+            report: "Needs approval",
+          };
+        }
+
+        return {
+          rawResponse: `${specialist.displayName} response`,
+          report: `${specialist.displayName} complete`,
+        };
+      },
+    });
+
+    expect(events.find((event) => event.type === "approval.requested")).toMatchObject({
+      agentId: "orion",
+      payload: {
+        blockedAction: "write /Users/eunhwa/shared/report.md",
+        codexStatus: "waiting-approval",
+        reason: "Needs a file outside the workspace.",
+        requestedSandbox: "danger-full-access",
+      },
+    });
+    expect(events.find((event) => event.agentId === "luma" && event.type === "agent.done")).toBeUndefined();
+  });
+
+  it("pauses queued specialist jobs when Codex asks for broader sandbox permission", async () => {
+    const events = await collectCodexAgentJobEvents(
+      {
+        agentId: "orion",
+        input: "Research this",
+        taskId: "task-approval",
+      },
+      {
+        ...workflowFixture(),
+        async runSpecialist() {
+          return {
+            rawResponse: JSON.stringify({
+              permissionRequest: {
+                reason: "Needs a file outside the workspace.",
+                sandbox: "danger-full-access",
+              },
+            }),
+            report: "Needs approval",
+          };
+        },
+      },
+    );
+
+    expect(events.at(-1)).toMatchObject({
+      agentId: "orion",
+      payload: {
+        codexStatus: "waiting-approval",
+        requestedSandbox: "danger-full-access",
+      },
+      type: "approval.requested",
+    });
+  });
+
+  it("pauses queued synthesis when Codex asks for broader sandbox permission", async () => {
+    const events = await collectCodexSynthesisEvents(
+      {
+        input: "Research this",
+        reports: { orion: "Research report" },
+        selectedAgentIds: ["orion"],
+        taskId: "task-approval",
+      },
+      {
+        ...workflowFixture(),
+        async synthesize() {
+          return {
+            finalOutput: JSON.stringify({
+              permissionRequest: {
+                reason: "Needs danger-full-access to finish.",
+                sandbox: "danger-full-access",
+              },
+            }),
+            rawResponse: "",
+          };
+        },
+      },
+    );
+
+    expect(events.at(-1)).toMatchObject({
+      agentId: "luma",
+      payload: {
+        codexStatus: "waiting-approval",
+        requestedSandbox: "danger-full-access",
+      },
+      type: "approval.requested",
+    });
   });
 
   it("injects previous run context into specialist and synthesis prompts", async () => {

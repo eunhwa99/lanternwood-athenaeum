@@ -1,10 +1,13 @@
 import { createServer, type IncomingMessage } from "node:http";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { PreviousRunContext } from "../src/events/types";
 import { validateAgentEvent } from "../src/events/validation";
+import { isSandboxMode, type SandboxMode } from "../src/harness/permissions";
 import { createTaskId } from "../src/harness/taskIds";
 import { createAgentDefinition, loadAgentDefinitions } from "./agentCatalog";
 import { createAgentDraftWithCodex } from "./agentDraft";
+import { ApprovalGate } from "./approvalGate";
 import { createCodexAgentJobEvents, createCodexEvents, createCodexServerFailureEvent, createCodexSynthesisEvents } from "./codexWorkflow";
 import { loadDotEnvFile } from "./env";
 import { codexRequestTokenHeader, dashboardCorsOrigin, validateCodexPostRequest } from "./httpGuards";
@@ -27,6 +30,14 @@ const agentIdPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const codexRoutes = new Set(["/api/runs", "/api/agent-jobs", "/api/synthesis"]);
 const agentAuthoringRoutes = new Set(["/api/agents", "/api/agents/draft"]);
 const workspaceRoutes = new Set(["/api/workspace-metadata", "/api/workspaces"]);
+
+type LanternwoodServerOptions = {
+  approvalGate?: ApprovalGate;
+  createAgentJobEvents?: typeof createCodexAgentJobEvents;
+  createEvents?: typeof createCodexEvents;
+  createSynthesisEvents?: typeof createCodexSynthesisEvents;
+  healthToken?: string;
+};
 
 function requestPath(url: string | undefined) {
   return url?.split("?")[0]?.replace(/\/+$/, "") || "/";
@@ -82,7 +93,30 @@ function validateReports(value: unknown): Partial<Record<SpecialistId, string>> 
   return reports;
 }
 
-const server = createServer(async (request, response) => {
+function stringValue(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function approvalAgentIdFor(path: string, body: Record<string, unknown>) {
+  if (path === "/api/agent-jobs") {
+    return validateSpecialistId(body.agentId);
+  }
+
+  if (path === "/api/synthesis") {
+    return "luma";
+  }
+
+  return stringValue(body.approvalAgentId);
+}
+
+export function createLanternwoodServer({
+  approvalGate = new ApprovalGate(),
+  createAgentJobEvents = createCodexAgentJobEvents,
+  createEvents = createCodexEvents,
+  createSynthesisEvents = createCodexSynthesisEvents,
+  healthToken: serverHealthToken = healthToken,
+}: LanternwoodServerOptions = {}) {
+  return createServer(async (request, response) => {
   const requestOrigin = request.headers.origin;
 
   response.setHeader("Access-Control-Allow-Headers", `Content-Type, X-Lanternwood-Codex-Token`);
@@ -97,8 +131,14 @@ const server = createServer(async (request, response) => {
   }
 
   if (request.method === "GET" && request.url === "/api/health") {
+    if (serverHealthToken && request.headers[codexRequestTokenHeader] !== serverHealthToken) {
+      response.writeHead(403, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ ok: false }));
+      return;
+    }
+
     response.writeHead(200, { "Content-Type": "application/json" });
-    response.end(JSON.stringify({ ok: true, token: healthToken }));
+    response.end(JSON.stringify({ ok: true }));
     return;
   }
 
@@ -112,7 +152,8 @@ const server = createServer(async (request, response) => {
 
   const guard = validateCodexPostRequest({
     contentType: request.headers["content-type"],
-    expectedToken: healthToken,
+    expectedToken: serverHealthToken,
+    fetchSite: typeof request.headers["sec-fetch-site"] === "string" ? request.headers["sec-fetch-site"] : undefined,
     origin: requestOrigin,
     token: request.headers[codexRequestTokenHeader] as string | undefined,
   });
@@ -124,10 +165,13 @@ const server = createServer(async (request, response) => {
   }
 
   let input = "";
+  let approvalToken: string | undefined;
   let previousRun: PreviousRunContext | undefined;
   let body: Record<string, unknown>;
+  let sandboxMode: SandboxMode = "workspace-write";
   let workspacePath: string | undefined;
   let globalAgents: Awaited<ReturnType<typeof loadGlobalAgents>> | undefined;
+  let agents: Awaited<ReturnType<typeof loadAgentDefinitions>> | undefined;
   try {
     body = await readJsonBody(request);
     if (path === "/api/agents/draft") {
@@ -189,7 +233,17 @@ const server = createServer(async (request, response) => {
     }
 
     input = typeof body.input === "string" ? body.input.trim() : "";
+    approvalToken = typeof body.approvalToken === "string" ? body.approvalToken.trim() : undefined;
     previousRun = validatePreviousRun(body.previousRun);
+    if (body.sandboxMode !== undefined) {
+      if (!isSandboxMode(body.sandboxMode)) {
+        response.writeHead(400, { "Content-Type": "text/plain" });
+        response.end("Invalid sandboxMode");
+        return;
+      }
+
+      sandboxMode = body.sandboxMode;
+    }
     if (typeof body.workspacePath === "string" && body.workspacePath.trim()) {
       globalAgents = await loadGlobalAgents();
       workspacePath = await resolveWorkspacePath(body.workspacePath, globalAgents.automationPolicy.allowRoots);
@@ -206,6 +260,36 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (path === "/api/agent-jobs" && !validateSpecialistId(body.agentId)) {
+    response.writeHead(400, { "Content-Type": "text/plain" });
+    response.end("Missing or invalid agentId");
+    return;
+  }
+
+  if (path === "/api/agent-jobs") {
+    agents = await loadAgentDefinitions();
+
+    if (!agents.some((agent) => agent.id === body.agentId && agent.id !== "luma")) {
+      response.writeHead(400, { "Content-Type": "text/plain" });
+      response.end("Missing or invalid agentId");
+      return;
+    }
+  }
+
+  const taskId = stringValue(body.taskId) ?? createTaskId(input);
+  const approval = approvalGate.approveRequest(input, sandboxMode, approvalToken, {
+    agentId: approvalAgentIdFor(path, body),
+    route: path,
+    taskId,
+    workspacePath,
+  });
+
+  if (!approval.ok) {
+    response.writeHead(403, { "Content-Type": "text/plain" });
+    response.end(approval.error);
+    return;
+  }
+
   response.writeHead(200, {
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
@@ -219,13 +303,9 @@ const server = createServer(async (request, response) => {
     }
   });
 
-  let taskId = createTaskId(input);
-
   try {
-    taskId = typeof body.taskId === "string" && body.taskId.trim() ? body.taskId.trim() : taskId;
-    const agents = await loadAgentDefinitions();
-    const sandboxMode = body.sandboxMode === "workspace-write" ? "workspace-write" : "read-only";
-    const events =
+	    agents ??= await loadAgentDefinitions();
+	    const events =
       path === "/api/agent-jobs"
         ? (() => {
             const agentId = validateSpecialistId(body.agentId);
@@ -234,7 +314,7 @@ const server = createServer(async (request, response) => {
               throw new Error("Missing or invalid agentId");
             }
 
-            return createCodexAgentJobEvents(
+            return createAgentJobEvents(
               {
                 agentId,
                 input,
@@ -247,7 +327,7 @@ const server = createServer(async (request, response) => {
             );
           })()
         : path === "/api/synthesis"
-          ? createCodexSynthesisEvents(
+          ? createSynthesisEvents(
               {
                 input,
                 reports: validateReports(body.reports),
@@ -257,7 +337,8 @@ const server = createServer(async (request, response) => {
               undefined,
               { agents, globalAgents, previousRun, sandboxMode, signal: abortController.signal, workspacePath },
             )
-          : createCodexEvents(input, undefined, {
+          : createEvents(input, undefined, {
+              approvalAgentId: approvalAgentIdFor(path, body),
               agents,
               globalAgents,
               previousRun,
@@ -270,6 +351,19 @@ const server = createServer(async (request, response) => {
     for await (const event of events) {
       if (abortController.signal.aborted) {
         break;
+      }
+
+      if (event.type === "approval.requested" && typeof event.payload?.requestedSandbox === "string") {
+        const requestedSandbox = event.payload.requestedSandbox;
+
+        if (isSandboxMode(requestedSandbox)) {
+          event.payload.approvalToken = approvalGate.createApproval(input, requestedSandbox, {
+            agentId: event.agentId,
+            route: path,
+            taskId: event.taskId,
+            workspacePath,
+          });
+        }
       }
 
       response.write(encodeAgentEvent(validateAgentEvent(event, "Invalid AgentEvent from Codex workflow")));
@@ -287,8 +381,13 @@ const server = createServer(async (request, response) => {
       response.end();
     }
   }
-});
+  });
+}
 
-server.listen(port, "127.0.0.1", () => {
-  console.log(`Lanternwood Codex CLI server listening on http://127.0.0.1:${port}`);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const server = createLanternwoodServer();
+
+  server.listen(port, "127.0.0.1", () => {
+    console.log(`Lanternwood Codex CLI server listening on http://127.0.0.1:${port}`);
+  });
+}

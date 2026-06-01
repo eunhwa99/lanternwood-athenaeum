@@ -26,6 +26,7 @@ describe("queuedRunOrchestratorReducer", () => {
         completedAgentIds: [],
         failedAgentIds: [],
         finalizing: false,
+        approvalPausedAgentIds: [],
         prompt: "Research first topic",
         queuedAgentIds: [],
         reports: {},

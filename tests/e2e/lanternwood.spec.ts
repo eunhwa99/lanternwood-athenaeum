@@ -553,6 +553,29 @@ test("keeps the layout stable on mobile without horizontal overflow", async ({ p
   expect(uiQuality.scrollRatio).toBeLessThanOrEqual(2.4);
 });
 
+test("shows a permission request and retries with the approved sandbox", async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as Window & {
+      __LANTERNWOOD_APPROVAL_TEST_FLOW__?: boolean;
+      __LANTERNWOOD_EVENT_DELAY_MS__?: number;
+    }).__LANTERNWOOD_APPROVAL_TEST_FLOW__ = true;
+    (window as Window & { __LANTERNWOOD_EVENT_DELAY_MS__?: number }).__LANTERNWOOD_EVENT_DELAY_MS__ = 0;
+  });
+  await page.goto("/");
+
+  await page.getByLabel("Task request").fill("Research outside workspace");
+  await page.getByRole("button", { name: "Send to Queue" }).click();
+
+  const permissionPanel = page.getByRole("region", { name: "Permission request" });
+  await expect(permissionPanel).toContainText("Orion requests danger-full-access");
+  await expect(permissionPanel).toContainText("write /Users/eunhwa/shared/report.md");
+
+  await permissionPanel.getByRole("button", { name: "Approve and retry" }).click();
+
+  await expect(page.getByRole("region", { name: "Work queue" })).toContainText("Approved retry completed with danger-full-access.");
+  await expect(permissionPanel).toHaveCount(0);
+});
+
 test("creates a repo-local agent, reloads it into routing, and renders workspace metadata", async ({ page }) => {
   const agentId = `e2e-scribe-${Date.now()}`;
   const catalogRoot = join(process.cwd(), ".agents", "lanternwood", "agents");

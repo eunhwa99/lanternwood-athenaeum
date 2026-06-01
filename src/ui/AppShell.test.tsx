@@ -1,11 +1,14 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AGENTS } from "../agents/registry";
 import type { AgentId } from "../agents/types";
+import { createInitialRunState, reduceAgentEvent, updateTask } from "../events/reducer";
 import type { AgentEvent } from "../events/types";
 import { mockRunAdapter } from "../harness/mockRunAdapter";
 import type { RunAdapter } from "../harness/runAdapter";
 import { renderApp } from "../test/render";
 import { AppShell } from "./AppShell";
+import { latestPermissionRequest } from "./permissionRequests";
 
  vi.mock("../world/LanternwoodScene", () => ({
    LanternwoodScene: ({
@@ -1200,7 +1203,7 @@ import { AppShell } from "./AppShell";
      await screen.findAllByText(/Final for Review this code and verify risky edge cases/);
    });
 
-   it("forwards workspace-write mode only after UI approval is enabled", async () => {
+   it("forwards workspace-write mode by default", async () => {
      const seenSandboxModes: unknown[] = [];
      const workspaceRunAdapter: RunAdapter = {
        async *startRun(input, options) {
@@ -1212,12 +1215,397 @@ import { AppShell } from "./AppShell";
 
      renderApp(<AppShell runAdapter={workspaceRunAdapter} />);
 
-     fireEvent.click(screen.getByLabelText("Allow workspace writes"));
      fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Write a file" } });
      fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
 
      await screen.findByText("Done");
      expect(seenSandboxModes).toEqual(["workspace-write"]);
+   });
+
+   it("surfaces permission requests and retries with the approval token", async () => {
+     const seenOptions: unknown[] = [];
+     const approvalRunAdapter: RunAdapter = {
+       async *startRun(input, options) {
+         seenOptions.push(options);
+         const taskId = `task-${seenOptions.length}`;
+
+         yield event(taskId, 1, "luma", "task.created", input);
+
+         if (options?.approvalToken === "approval-1" && options.sandboxMode === "danger-full-access") {
+           yield event(taskId, 2, "luma", "agent.done", "Done after approval", {
+             finalOutput: "Approved retry completed with danger-full-access.",
+           });
+           return;
+         }
+
+         yield event(taskId, 2, "orion", "approval.requested", "Orion requests danger-full-access permission", {
+           approvalToken: "approval-1",
+           blockedAction: "write /Users/eunhwa/shared/report.md",
+           reason: "Needs a file outside the workspace.",
+           requestedSandbox: "danger-full-access",
+         });
+       },
+     };
+
+     renderApp(<AppShell runAdapter={approvalRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Target workspace"), { target: { value: "/workspace/original" } });
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Write outside workspace" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     const permissionPanel = await screen.findByRole("region", { name: "Permission request" });
+     expect(permissionPanel).toHaveTextContent("Orion requests danger-full-access");
+     expect(permissionPanel).toHaveTextContent("Needs a file outside the workspace.");
+     expect(permissionPanel).toHaveTextContent("write /Users/eunhwa/shared/report.md");
+
+     fireEvent.change(screen.getByLabelText("Target workspace"), { target: { value: "/workspace/changed" } });
+     fireEvent.click(within(permissionPanel).getByRole("button", { name: "Approve and retry" }));
+
+     await screen.findAllByText("Approved retry completed with danger-full-access.");
+     expect(seenOptions[0]).toMatchObject({ sandboxMode: "workspace-write", workspacePath: "/workspace/original" });
+     expect(seenOptions[1]).toMatchObject({
+       approvalAgentId: "orion",
+       approvalToken: "approval-1",
+       sandboxMode: "danger-full-access",
+       taskId: "task-1",
+       workspacePath: "/workspace/original",
+     });
+   });
+
+   it("preserves the repository default workspace when retrying a non-queued approval", async () => {
+     const seenOptions: unknown[] = [];
+     const approvalRunAdapter: RunAdapter = {
+       async *startRun(input, options) {
+         seenOptions.push(options);
+         const taskId = "task-1";
+
+         yield event(taskId, 1, "luma", "task.created", input);
+
+         if (options?.approvalToken === "approval-1") {
+           yield event(taskId, 3, "luma", "agent.done", "Done after approval", {
+             finalOutput: "Default workspace approval retry completed.",
+           });
+           return;
+         }
+
+         yield event(taskId, 2, "orion", "approval.requested", "Orion requests danger-full-access permission", {
+           approvalToken: "approval-1",
+           reason: "Needs broader access.",
+           requestedSandbox: "danger-full-access",
+         });
+       },
+     };
+
+     renderApp(<AppShell runAdapter={approvalRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Use repo default workspace" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     const permissionPanel = await screen.findByRole("region", { name: "Permission request" });
+     fireEvent.change(screen.getByLabelText("Target workspace"), { target: { value: "/workspace/changed" } });
+     fireEvent.click(within(permissionPanel).getByRole("button", { name: "Approve and retry" }));
+
+     await screen.findAllByText("Default workspace approval retry completed.");
+     expect(seenOptions[0]).toMatchObject({ workspacePath: undefined });
+     expect(seenOptions[1]).toMatchObject({
+       approvalAgentId: "orion",
+       approvalToken: "approval-1",
+       sandboxMode: "danger-full-access",
+       taskId: "task-1",
+       workspacePath: undefined,
+     });
+   });
+
+   it("keeps approval retries on the queued workbench path when the adapter supports queues", async () => {
+     const startRun = vi.fn(async function* () {
+       const shouldYield = Date.now() < 0;
+       if (shouldYield) {
+         yield event("unexpected", 1, "luma", "agent.failed", "Unexpected startRun");
+       }
+       throw new Error("startRun should not handle queued approval retries");
+     });
+     const seenAgentOptions: unknown[] = [];
+     const queuedApprovalRunAdapter: RunAdapter = {
+       startRun,
+       async *startAgentJob(job, options) {
+         seenAgentOptions.push(options);
+
+         if (options?.approvalToken === "approval-1" && options.sandboxMode === "danger-full-access") {
+           yield event(job.taskId, 2, job.agentId, "agent.reporting", "Orion reports after approval", {
+             report: "Approved specialist report",
+           });
+           return;
+         }
+
+         yield event(job.taskId, 1, job.agentId, "approval.requested", "Orion requests danger-full-access permission", {
+           approvalToken: "approval-1",
+           blockedAction: "write /Users/eunhwa/shared/report.md",
+           reason: "Needs a file outside the workspace.",
+           requestedSandbox: "danger-full-access",
+         });
+       },
+       async *synthesizeTask(task) {
+         yield event(task.taskId, 3, "luma", "agent.done", "Done after queued approval", {
+           finalOutput: "Queued approval retry completed.",
+         });
+       },
+     };
+
+     renderApp(<AppShell runAdapter={queuedApprovalRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Research outside workspace" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     const permissionPanel = await screen.findByRole("region", { name: "Permission request" });
+     expect(permissionPanel).toHaveTextContent("Orion requests danger-full-access");
+
+     fireEvent.click(within(permissionPanel).getByRole("button", { name: "Approve and retry" }));
+
+     await screen.findAllByText("Queued approval retry completed.");
+     expect(startRun).not.toHaveBeenCalled();
+     expect(screen.queryByRole("region", { name: "Permission request" })).not.toBeInTheDocument();
+     expect(seenAgentOptions[0]).toMatchObject({ sandboxMode: "workspace-write" });
+     expect(seenAgentOptions[1]).toMatchObject({ approvalToken: "approval-1", sandboxMode: "danger-full-access" });
+   });
+
+   it("retries the requesting review agent after primary reports are ready", async () => {
+     const seenAgentCalls: Array<{ agentId: AgentId; approvalToken?: string; sandboxMode?: unknown }> = [];
+     const queuedApprovalRunAdapter: RunAdapter = {
+       startRun() {
+         throw new Error("queued adapter should not call startRun");
+       },
+       async *startAgentJob(job, options) {
+         seenAgentCalls.push({
+           agentId: job.agentId,
+           approvalToken: options?.approvalToken,
+           sandboxMode: options?.sandboxMode,
+         });
+
+         if (job.agentId === "orion") {
+           yield event(job.taskId, 1, "orion", "agent.reporting", "Orion reports before review", {
+             report: "Primary research report",
+           });
+           return;
+         }
+
+         if (job.agentId === "argus" && options?.approvalToken === "approval-1") {
+           yield event(job.taskId, 3, "argus", "agent.reporting", "Argus reports after approval", {
+             report: "Approved review report",
+           });
+           return;
+         }
+
+         yield event(job.taskId, 2, "argus", "approval.requested", "Argus requests danger-full-access permission", {
+           approvalToken: "approval-1",
+           reason: "Needs broader access to complete review.",
+           requestedSandbox: "danger-full-access",
+         });
+       },
+       async *synthesizeTask(task) {
+         yield event(task.taskId, 4, "luma", "agent.done", "Done after review approval", {
+           finalOutput: "Queued review approval retry completed.",
+         });
+       },
+     };
+
+     renderApp(<AppShell runAdapter={queuedApprovalRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Review this code and verify risky edge cases" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     const permissionPanel = await screen.findByRole("region", { name: "Permission request" });
+     expect(permissionPanel).toHaveTextContent("Argus requests danger-full-access");
+
+     fireEvent.click(within(permissionPanel).getByRole("button", { name: "Approve and retry" }));
+
+     await screen.findAllByText("Queued review approval retry completed.");
+     expect(seenAgentCalls).toEqual([
+       { agentId: "orion", approvalToken: undefined, sandboxMode: "workspace-write" },
+       { agentId: "argus", approvalToken: undefined, sandboxMode: "workspace-write" },
+       { agentId: "argus", approvalToken: "approval-1", sandboxMode: "danger-full-access" },
+     ]);
+   });
+
+   it("scopes queued approval tokens to the requesting specialist when paused siblings resume", async () => {
+     const quillStarted = deferred();
+     const releaseOriginalQuill = deferred();
+     const seenAgentCalls: Array<{ agentId: AgentId; approvalToken?: string; sandboxMode?: unknown }> = [];
+     const queuedApprovalRunAdapter: RunAdapter = {
+       startRun() {
+         throw new Error("queued adapter should not call startRun");
+       },
+       async *startAgentJob(job, options) {
+         seenAgentCalls.push({
+           agentId: job.agentId,
+           approvalToken: options?.approvalToken,
+           sandboxMode: options?.sandboxMode,
+         });
+
+         if (job.agentId === "quill" && !options?.approvalToken && seenAgentCalls.filter((call) => call.agentId === "quill").length === 1) {
+           quillStarted.resolve();
+           await releaseOriginalQuill.promise;
+           yield event(job.taskId, 2, "quill", "agent.reporting", "Original Quill report should be ignored after abort", {
+             report: "Ignored original Quill report",
+           });
+           return;
+         }
+
+         if (job.agentId === "orion" && !options?.approvalToken) {
+           await quillStarted.promise;
+           yield event(job.taskId, 1, "orion", "approval.requested", "Orion requests danger-full-access permission", {
+             approvalToken: "approval-1",
+             reason: "Needs a file outside the workspace.",
+             requestedSandbox: "danger-full-access",
+           });
+           return;
+         }
+
+         if (job.agentId === "orion") {
+           yield event(job.taskId, 3, "orion", "agent.reporting", "Orion reports after approval", {
+             report: "Approved Orion report",
+           });
+           return;
+         }
+
+         yield event(job.taskId, 4, "quill", "agent.reporting", "Quill reports after being resumed", {
+           report: "Workspace-write Quill report",
+         });
+       },
+       async *synthesizeTask(task) {
+         yield event(task.taskId, 5, "luma", "agent.done", "Done after scoped approval", {
+           finalOutput: "Scoped approval retry completed.",
+         });
+       },
+     };
+
+     renderApp(<AppShell runAdapter={queuedApprovalRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Research and draft outside workspace" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     const permissionPanel = await screen.findByRole("region", { name: "Permission request" });
+     expect(permissionPanel).toHaveTextContent("Orion requests danger-full-access");
+
+     fireEvent.click(within(permissionPanel).getByRole("button", { name: "Approve and retry" }));
+     fireEvent.click(within(permissionPanel).getByRole("button", { name: "Approve and retry" }));
+     releaseOriginalQuill.resolve();
+
+     await screen.findAllByText("Scoped approval retry completed.");
+     expect(seenAgentCalls).toEqual([
+       { agentId: "orion", approvalToken: undefined, sandboxMode: "workspace-write" },
+       { agentId: "quill", approvalToken: undefined, sandboxMode: "workspace-write" },
+       { agentId: "orion", approvalToken: "approval-1", sandboxMode: "danger-full-access" },
+       { agentId: "quill", approvalToken: undefined, sandboxMode: "workspace-write" },
+     ]);
+   });
+
+   it("keeps a queued permission request visible when a sibling specialist finishes later", async () => {
+     const gates = new Map<string, ReturnType<typeof deferred>>();
+     const queuedApprovalRunAdapter: RunAdapter = {
+       startRun() {
+         throw new Error("queued adapter should not call startRun");
+       },
+       async *startAgentJob(job) {
+         if (job.agentId === "orion") {
+           yield event(job.taskId, 1, "orion", "approval.requested", "Orion requests danger-full-access permission", {
+             approvalToken: "approval-1",
+             reason: "Needs a file outside the workspace.",
+             requestedSandbox: "danger-full-access",
+           });
+           return;
+         }
+
+         const gate = deferred();
+         gates.set(job.agentId, gate);
+         await gate.promise;
+         yield event(job.taskId, 2, job.agentId, "agent.failed", `${job.agentId} failed after approval was requested`);
+       },
+       async *synthesizeTask() {
+         const shouldYield = Date.now() < 0;
+         if (shouldYield) {
+           yield event("unexpected", 1, "luma", "agent.failed", "Unexpected synthesis");
+         }
+         throw new Error("synthesis should not run while approval is pending");
+       },
+     };
+
+     renderApp(<AppShell runAdapter={queuedApprovalRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Research and draft outside workspace" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     const permissionPanel = await screen.findByRole("region", { name: "Permission request" });
+     expect(permissionPanel).toHaveTextContent("Orion requests danger-full-access");
+
+     for (const gate of gates.values()) {
+       gate.resolve();
+     }
+
+     await waitFor(() => expect(screen.getByLabelText("Agents summary")).toHaveTextContent("Quill: waitingApproval"));
+     expect(screen.queryByText("quill failed after approval was requested")).not.toBeInTheDocument();
+     expect(screen.getByRole("region", { name: "Permission request" })).toHaveTextContent("Orion requests danger-full-access");
+   });
+
+   it("hides queued permission requests after stopping the run", async () => {
+     const queuedApprovalRunAdapter: RunAdapter = {
+       startRun() {
+         throw new Error("queued adapter should not call startRun");
+       },
+       async *startAgentJob(job) {
+         yield event(job.taskId, 1, job.agentId, "approval.requested", "Orion requests danger-full-access permission", {
+           approvalToken: "approval-1",
+           reason: "Needs a file outside the workspace.",
+           requestedSandbox: "danger-full-access",
+         });
+       },
+       async *synthesizeTask() {
+         const shouldYield = Date.now() < 0;
+         if (shouldYield) {
+           yield event("unexpected", 1, "luma", "agent.failed", "Unexpected synthesis");
+         }
+       },
+     };
+
+     renderApp(<AppShell runAdapter={queuedApprovalRunAdapter} />);
+
+     fireEvent.change(screen.getByLabelText("Task request"), { target: { value: "Research outside workspace" } });
+     fireEvent.click(screen.getByRole("button", { name: "Send to Queue" }));
+
+     await screen.findByRole("region", { name: "Permission request" });
+     fireEvent.click(screen.getByRole("button", { name: "Stop run" }));
+
+     await waitFor(() => {
+       expect(screen.queryByRole("region", { name: "Permission request" })).not.toBeInTheDocument();
+     });
+   });
+
+   it("continues past stale approval events from completed tasks", () => {
+     const pendingTaskCreated = event("task-pending", 1, "luma", "task.created", "Pending task");
+     const pendingApproval = event("task-pending", 2, "orion", "approval.requested", "Orion requests pending approval", {
+       approvalToken: "approval-pending",
+       reason: "Pending approval.",
+       requestedSandbox: "danger-full-access",
+     });
+     const doneTaskCreated = event("task-done", 3, "luma", "task.created", "Completed task");
+     const staleApproval = event("task-done", 4, "orion", "approval.requested", "Orion requests stale approval", {
+       approvalToken: "approval-stale",
+       reason: "Stale approval.",
+       requestedSandbox: "danger-full-access",
+     });
+     const withEvents = [pendingTaskCreated, pendingApproval, doneTaskCreated, staleApproval].reduce(
+       (state, item) => reduceAgentEvent(state, item),
+       createInitialRunState(AGENTS),
+     );
+     const state = updateTask(withEvents, "task-done", {
+       completedAt: "2026-05-28T00:00:05.000Z",
+       finalOutput: "Done",
+       status: "done",
+     });
+
+     expect(latestPermissionRequest(state)).toMatchObject({
+       approvalToken: "approval-pending",
+       taskId: "task-pending",
+     });
    });
 
    it("loads workspace metadata and skill hints into the dashboard", async () => {

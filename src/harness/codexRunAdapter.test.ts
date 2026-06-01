@@ -159,7 +159,7 @@ describe("codex run adapter", () => {
     );
   });
 
-  it("forwards workspace-write sandbox mode to Codex backend POST routes", async () => {
+  it("forwards approval tokens and workspace-write sandbox mode to Codex backend POST routes", async () => {
     const responseWithTerminalEvent = () =>
       new Response(
         new ReadableStream<Uint8Array>({
@@ -173,14 +173,14 @@ describe("codex run adapter", () => {
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => responseWithTerminalEvent());
     const adapter = createCodexRunAdapter({ endpoint: "/api/runs", fetchImpl: fetchMock });
 
-    for await (const event of adapter.startRun("Write files", { sandboxMode: "workspace-write" })) {
+    for await (const event of adapter.startRun("Write files", { approvalToken: "approval-1", sandboxMode: "workspace-write" })) {
       expect(event).toBeDefined();
     }
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/runs",
       expect.objectContaining({
-        body: JSON.stringify({ input: "Write files", sandboxMode: "workspace-write" }),
+        body: JSON.stringify({ input: "Write files", approvalToken: "approval-1", sandboxMode: "workspace-write" }),
       }),
     );
   });

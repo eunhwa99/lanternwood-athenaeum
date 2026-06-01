@@ -12,7 +12,20 @@ type QueuedRunAdapter = RunAdapter & {
   synthesizeTask: NonNullable<RunAdapter["synthesizeTask"]>;
 };
 
+type QueueAbortController = {
+  agentId: AgentId;
+  controller: AbortController;
+  taskId: string;
+};
+
 type TaskRuntimeState = {
+  approvedRetry?: {
+    agentId: AgentId;
+    approvalToken?: string;
+    sandboxMode: RunAdapterOptions["sandboxMode"];
+  };
+  approvalPausedAgentIds: SpecialistAgentId[];
+  approvalPendingAgentId?: AgentId;
   completedAgentIds: SpecialistAgentId[];
   failedAgentIds: SpecialistAgentId[];
   finalizing: boolean;
@@ -39,6 +52,7 @@ export type QueuedRunOrchestratorState = {
 export type QueuedRunOrchestratorAction =
   | { type: "agentCompleted"; agentId: SpecialistAgentId; taskId: string }
   | { type: "agentFailed"; agentId: SpecialistAgentId; taskId: string }
+  | { type: "clearTaskApprovalPausedAgent"; agentId: SpecialistAgentId; taskId: string }
   | { type: "clearPendingWork" }
   | { type: "dequeueSpecialist"; agentId: SpecialistAgentId; job: AgentJobRequest }
   | { type: "dequeueSynthesis"; taskId: string }
@@ -47,8 +61,18 @@ export type QueuedRunOrchestratorAction =
   | { type: "enqueueSynthesis"; taskId: string }
   | { type: "recordReport"; agentId: AgentId; report: string; taskId: string }
   | { type: "registerTask"; runtime: TaskRuntimeState }
+  | { type: "retrySpecialist"; agentId: SpecialistAgentId; job: AgentJobRequest; taskId: string }
+  | { type: "retrySynthesis"; taskId: string }
   | { type: "setSpecialistActive"; active: boolean; agentId: SpecialistAgentId }
   | { type: "setSynthesisActive"; active: boolean }
+  | {
+      type: "setTaskApproval";
+      agentId: AgentId;
+      approvalToken?: string;
+      sandboxMode: RunAdapterOptions["sandboxMode"];
+      taskId: string;
+    }
+  | { type: "setTaskApprovalPending"; agentId: AgentId; pausedAgentIds?: SpecialistAgentId[]; taskId: string }
   | { type: "setTaskFinalizing"; finalizing: boolean; taskId: string };
 
 const specialistAgentIds = AGENTS.filter((agent) => agent.id !== "luma").map((agent) => agent.id);
@@ -101,13 +125,27 @@ export function queuedRunOrchestratorReducer(
     case "agentCompleted":
       return updateRuntime(state, action.taskId, (runtime) => ({
         ...runtime,
+        approvedRetry: runtime.approvedRetry?.agentId === action.agentId ? undefined : runtime.approvedRetry,
+        approvalPausedAgentIds: runtime.approvalPausedAgentIds.filter((agentId) => agentId !== action.agentId),
+        approvalPendingAgentId:
+          runtime.approvalPendingAgentId === action.agentId ? undefined : runtime.approvalPendingAgentId,
         completedAgentIds: addUniqueAgentId(runtime.completedAgentIds, action.agentId),
       }));
 
     case "agentFailed":
       return updateRuntime(state, action.taskId, (runtime) => ({
         ...runtime,
+        approvedRetry: runtime.approvedRetry?.agentId === action.agentId ? undefined : runtime.approvedRetry,
+        approvalPausedAgentIds: runtime.approvalPausedAgentIds.filter((agentId) => agentId !== action.agentId),
+        approvalPendingAgentId:
+          runtime.approvalPendingAgentId === action.agentId ? undefined : runtime.approvalPendingAgentId,
         failedAgentIds: addUniqueAgentId(runtime.failedAgentIds, action.agentId),
+      }));
+
+    case "clearTaskApprovalPausedAgent":
+      return updateRuntime(state, action.taskId, (runtime) => ({
+        ...runtime,
+        approvalPausedAgentIds: runtime.approvalPausedAgentIds.filter((agentId) => agentId !== action.agentId),
       }));
 
     case "clearPendingWork":
@@ -195,6 +233,37 @@ export function queuedRunOrchestratorReducer(
         },
       };
 
+    case "retrySpecialist":
+      return updateRuntime(
+        {
+          ...state,
+          specialistQueues: {
+            ...state.specialistQueues,
+            [action.agentId]: [...state.specialistQueues[action.agentId], action.job],
+          },
+        },
+        action.taskId,
+        (runtime) => ({
+          ...runtime,
+          queuedAgentIds: addUniqueAgentId(runtime.queuedAgentIds, action.agentId),
+        }),
+      );
+
+    case "retrySynthesis":
+      return updateRuntime(
+        {
+          ...state,
+          synthesisQueue: state.synthesisQueue.includes(action.taskId)
+            ? state.synthesisQueue
+            : [...state.synthesisQueue, action.taskId],
+        },
+        action.taskId,
+        (runtime) => ({
+          ...runtime,
+          synthesisQueued: true,
+        }),
+      );
+
     case "setSpecialistActive":
       return {
         ...state,
@@ -209,6 +278,24 @@ export function queuedRunOrchestratorReducer(
         ...state,
         synthesisActive: action.active,
       };
+
+    case "setTaskApproval":
+      return updateRuntime(state, action.taskId, (runtime) => ({
+        ...runtime,
+        approvedRetry: {
+          agentId: action.agentId,
+          approvalToken: action.approvalToken,
+          sandboxMode: action.sandboxMode,
+        },
+      }));
+
+    case "setTaskApprovalPending":
+      return updateRuntime(state, action.taskId, (runtime) => ({
+        ...runtime,
+        approvedRetry: undefined,
+        approvalPausedAgentIds: [...new Set([...runtime.approvalPausedAgentIds, ...(action.pausedAgentIds ?? [])])],
+        approvalPendingAgentId: action.agentId,
+      }));
 
     case "setTaskFinalizing":
       return updateRuntime(state, action.taskId, (runtime) => ({
@@ -245,6 +332,10 @@ function isReviewAgent(agentId: AgentId) {
   return AGENTS.find((agent) => agent.id === agentId)?.systemRole === "ReviewAgent";
 }
 
+function isSpecialistAgentId(agentId: AgentId): agentId is SpecialistAgentId {
+  return specialistAgentIds.includes(agentId as SpecialistAgentId);
+}
+
 function createClientEvent(
   taskId: string,
   index: number,
@@ -270,6 +361,18 @@ function messageFromError(error: unknown) {
 
 function agentDisplayName(agentId: AgentId) {
   return AGENTS.find((agent) => agent.id === agentId)?.displayName ?? agentId;
+}
+
+function createSpecialistJob(runtime: TaskRuntimeState, agentId: SpecialistAgentId): AgentJobRequest {
+  return {
+    agentId,
+    delegatedPrompt: delegatedPrompts[agentId],
+    prompt: runtime.prompt,
+    selectedAgentIds: runtime.selectedAgentIds,
+    skippedAgentIds: runtime.skippedAgentIds,
+    specialistReports: isReviewAgent(agentId) ? runtime.reports : undefined,
+    taskId: runtime.taskId,
+  };
 }
 
 function failQueuedStateJobsForTask(state: RunState, taskId: string, reason: string, completedAt: string, exceptJobId?: string) {
@@ -301,7 +404,7 @@ export function useQueuedRunOrchestrator({
 }: UseQueuedRunOrchestratorOptions) {
   const [queueState, setQueueState] = useState(createInitialQueuedRunOrchestratorState);
   const queueStateRef = useRef(queueState);
-  const queueAbortControllersRef = useRef<Set<AbortController>>(new Set());
+  const queueAbortControllersRef = useRef<Set<QueueAbortController>>(new Set());
   const taskIdCounterRef = useRef(0);
 
   const dispatchQueue = useCallback((action: QueuedRunOrchestratorAction) => {
@@ -327,6 +430,21 @@ export function useQueuedRunOrchestrator({
     [dispatchQueue],
   );
 
+  const abortActiveSiblingJobsForTask = useCallback((taskId: string, requestingAgentId: AgentId) => {
+    const abortedAgentIds: SpecialistAgentId[] = [];
+
+    for (const entry of queueAbortControllersRef.current) {
+      if (entry.taskId === taskId && entry.agentId !== requestingAgentId) {
+        entry.controller.abort();
+        if (isSpecialistAgentId(entry.agentId) && !abortedAgentIds.includes(entry.agentId)) {
+          abortedAgentIds.push(entry.agentId);
+        }
+      }
+    }
+
+    return abortedAgentIds;
+  }, []);
+
   const queueSynthesisRef = useRef<(taskId: string) => void>(() => undefined);
   const maybeQueueSynthesisRef = useRef<(taskId: string) => void>(() => undefined);
   const runSynthesisQueueRef = useRef<() => Promise<void>>(async () => undefined);
@@ -346,15 +464,7 @@ export function useQueuedRunOrchestrator({
       }
 
       const delegatedPrompt = delegatedPrompts[agentId];
-      const job: AgentJobRequest = {
-        agentId,
-        delegatedPrompt,
-        prompt: runtime.prompt,
-        selectedAgentIds: runtime.selectedAgentIds,
-        skippedAgentIds: runtime.skippedAgentIds,
-        specialistReports: isReviewAgent(agentId) ? runtime.reports : undefined,
-        taskId,
-      };
+      const job = createSpecialistJob(runtime, agentId);
 
       dispatchQueue({ agentId, job, taskId, type: "enqueueSpecialist" });
       commitEvent(
@@ -466,9 +576,10 @@ export function useQueuedRunOrchestrator({
 
     const jobId = `${taskId}-luma-synthesis`;
     const abortController = new AbortController();
+    const abortEntry: QueueAbortController = { agentId: "luma", controller: abortController, taskId };
     dispatchQueue({ active: true, type: "setSynthesisActive" });
     dispatchQueue({ finalizing: true, taskId, type: "setTaskFinalizing" });
-    queueAbortControllersRef.current.add(abortController);
+    queueAbortControllersRef.current.add(abortEntry);
     setRunStateSynced((current) =>
       updateAgentJob(updateTask(current, taskId, { status: "synthesizing" }), jobId, {
         lastMessage: "Luma is synthesizing the task result",
@@ -484,13 +595,16 @@ export function useQueuedRunOrchestrator({
       skippedAgentIds: runtime.skippedAgentIds,
       taskId,
     };
+    const approvedSynthesisRetry = runtime.approvedRetry?.agentId === "luma" ? runtime.approvedRetry : undefined;
     const options: RunAdapterOptions = {
       previousRun: runtime.previousRun,
-      sandboxMode: runtime.sandboxMode,
+      approvalToken: approvedSynthesisRetry?.approvalToken,
+      sandboxMode: approvedSynthesisRetry?.sandboxMode ?? runtime.sandboxMode,
       signal: abortController.signal,
       taskId,
       workspacePath: runtime.workspacePath,
     };
+    let terminalApproval: AgentEvent | undefined;
     let terminalFailure: AgentEvent | undefined;
 
     try {
@@ -502,6 +616,10 @@ export function useQueuedRunOrchestrator({
         if (event.type === "agent.failed") {
           terminalFailure = event;
         }
+      if (event.type === "approval.requested") {
+        terminalApproval = event;
+        dispatchQueue({ agentId: event.agentId, taskId, type: "setTaskApprovalPending" });
+      }
 
         commitEvent(event, (current) =>
           event.type === "agent.failed"
@@ -528,6 +646,9 @@ export function useQueuedRunOrchestrator({
       }
 
       if (terminalFailure) {
+        return;
+      }
+      if (terminalApproval) {
         return;
       }
 
@@ -558,7 +679,7 @@ export function useQueuedRunOrchestrator({
         ),
       );
     } finally {
-      queueAbortControllersRef.current.delete(abortController);
+      queueAbortControllersRef.current.delete(abortEntry);
       dispatchQueue({ taskId, type: "dequeueSynthesis" });
       dispatchQueue({ finalizing: false, taskId, type: "setTaskFinalizing" });
       dispatchQueue({ active: false, type: "setSynthesisActive" });
@@ -597,10 +718,12 @@ export function useQueuedRunOrchestrator({
       }
 
       const abortController = new AbortController();
+      const abortEntry: QueueAbortController = { agentId, controller: abortController, taskId: job.taskId };
       let report: string | undefined;
+      let terminalApproval: AgentEvent | undefined;
       let terminalFailure: AgentEvent | undefined;
       dispatchQueue({ active: true, agentId, type: "setSpecialistActive" });
-      queueAbortControllersRef.current.add(abortController);
+      queueAbortControllersRef.current.add(abortEntry);
       setRunStateSynced((current) =>
         updateAgentJob(updateTask(current, job.taskId, { status: "running" }), jobId, {
           lastMessage: `${agentDisplayName(agentId)} is working`,
@@ -610,12 +733,16 @@ export function useQueuedRunOrchestrator({
       );
 
       try {
+        const runtime = queueStateRef.current.taskRuntimes[job.taskId];
+        const approvedSpecialistRetry = runtime?.approvedRetry?.agentId === agentId ? runtime.approvedRetry : undefined;
+
         for await (const event of queuedRunAdapter.startAgentJob(job, {
-          previousRun: queueStateRef.current.taskRuntimes[job.taskId]?.previousRun,
-          sandboxMode: queueStateRef.current.taskRuntimes[job.taskId]?.sandboxMode,
+          approvalToken: approvedSpecialistRetry?.approvalToken,
+          previousRun: runtime?.previousRun,
+          sandboxMode: approvedSpecialistRetry?.sandboxMode ?? runtime?.sandboxMode,
           signal: abortController.signal,
           taskId: job.taskId,
-          workspacePath: queueStateRef.current.taskRuntimes[job.taskId]?.workspacePath,
+          workspacePath: runtime?.workspacePath,
         })) {
           if (abortController.signal.aborted) {
             throw new Error("Run aborted");
@@ -631,6 +758,12 @@ export function useQueuedRunOrchestrator({
           if (event.type === "agent.failed") {
             terminalFailure = event;
             discardQueuedRuntimeJobsForTask(job.taskId, job);
+          }
+          if (event.type === "approval.requested") {
+            terminalApproval = event;
+            discardQueuedRuntimeJobsForTask(job.taskId, job);
+            const pausedAgentIds = abortActiveSiblingJobsForTask(job.taskId, event.agentId);
+            dispatchQueue({ agentId: event.agentId, pausedAgentIds, taskId: job.taskId, type: "setTaskApprovalPending" });
           }
 
           commitEvent(event, (current) =>
@@ -687,6 +820,9 @@ export function useQueuedRunOrchestrator({
           dispatchQueue({ agentId, taskId: job.taskId, type: "agentFailed" });
           return;
         }
+        if (terminalApproval) {
+          return;
+        }
 
         dispatchQueue({ agentId, taskId: job.taskId, type: "agentCompleted" });
         setRunStateSynced((current) =>
@@ -701,6 +837,27 @@ export function useQueuedRunOrchestrator({
       } catch (error) {
         const message = messageFromError(error);
         const now = new Date().toISOString();
+        const runtime = queueStateRef.current.taskRuntimes[job.taskId];
+
+        if (abortController.signal.aborted && runtime?.approvalPausedAgentIds.includes(agentId)) {
+          dispatchQueue({ agentId, taskId: job.taskId, type: "clearTaskApprovalPausedAgent" });
+          commitEvent(
+            createClientEvent(
+              job.taskId,
+              getRunState().timeline.length + 1,
+              agentId,
+              "agent.paused",
+              `${agentDisplayName(agentId)} paused while another agent waits for approval`,
+            ),
+            (current) =>
+              updateAgentJob(current, jobId, {
+                lastMessage: "Paused while another agent waits for approval",
+                status: "queued",
+              }),
+          );
+          return;
+        }
+
         dispatchQueue({ agentId, taskId: job.taskId, type: "agentFailed" });
         discardQueuedRuntimeJobsForTask(job.taskId, job);
         commitEvent(createClientEvent(job.taskId, getRunState().timeline.length + 1, agentId, "agent.failed", message), (current) =>
@@ -726,13 +883,89 @@ export function useQueuedRunOrchestrator({
           ),
         );
       } finally {
-        queueAbortControllersRef.current.delete(abortController);
+        queueAbortControllersRef.current.delete(abortEntry);
         dispatchQueue({ agentId, job, type: "dequeueSpecialist" });
         dispatchQueue({ active: false, agentId, type: "setSpecialistActive" });
         void runSpecialistQueueRef.current(agentId);
       }
     },
-    [commitEvent, discardQueuedRuntimeJobsForTask, dispatchQueue, getRunState, queuedRunAdapter, setRunStateSynced],
+    [
+      abortActiveSiblingJobsForTask,
+      commitEvent,
+      discardQueuedRuntimeJobsForTask,
+      dispatchQueue,
+      getRunState,
+      queuedRunAdapter,
+      setRunStateSynced,
+    ],
+  );
+  const approveQueuedRequest = useCallback(
+    (taskId: string, agentId: AgentId, sandboxMode: RunAdapterOptions["sandboxMode"], approvalToken?: string) => {
+      const runtime = queueStateRef.current.taskRuntimes[taskId];
+
+      if (!runtime || !sandboxMode) {
+        return false;
+      }
+
+      if (runtime.approvedRetry?.agentId === agentId) {
+        return true;
+      }
+
+      dispatchQueue({ agentId, approvalToken, sandboxMode, taskId, type: "setTaskApproval" });
+
+      if (agentId === "luma") {
+        dispatchQueue({ taskId, type: "retrySynthesis" });
+        setRunStateSynced((current) =>
+          updateAgentJob(updateTask(current, taskId, { status: "synthesizing" }), `${taskId}-luma-synthesis`, {
+            lastMessage: "Approved retry queued",
+            status: "queued",
+          }),
+        );
+        void runSynthesisQueueRef.current();
+        return true;
+      }
+
+      if (!runtime.selectedAgentIds.includes(agentId)) {
+        return false;
+      }
+
+      const reviewAgentId = runtime.selectedAgentIds.find(isReviewAgent);
+      const primaryAgentIds = runtime.selectedAgentIds.filter((candidateAgentId) => candidateAgentId !== reviewAgentId);
+      const primaryReportsComplete = primaryAgentIds.every((candidateAgentId) =>
+        runtime.completedAgentIds.includes(candidateAgentId),
+      );
+      const retryAgentIds = runtime.selectedAgentIds.filter((candidateAgentId) => {
+        if (runtime.completedAgentIds.includes(candidateAgentId) || runtime.failedAgentIds.includes(candidateAgentId)) {
+          return false;
+        }
+
+        return !isReviewAgent(candidateAgentId) || (candidateAgentId === agentId && primaryReportsComplete);
+      });
+
+      for (const specialistId of retryAgentIds) {
+        dispatchQueue({
+          agentId: specialistId,
+          job: createSpecialistJob(runtime, specialistId),
+          taskId,
+          type: "retrySpecialist",
+        });
+      }
+      setRunStateSynced((current) =>
+        retryAgentIds.reduce(
+          (next, specialistId) =>
+            updateAgentJob(next, `${taskId}-${specialistId}`, {
+              lastMessage: "Approved retry queued",
+              status: "queued",
+            }),
+          updateTask(current, taskId, { status: "running" }),
+        ),
+      );
+      for (const specialistId of retryAgentIds) {
+        void runSpecialistQueueRef.current(specialistId);
+      }
+      return true;
+    },
+    [dispatchQueue, setRunStateSynced],
   );
   useEffect(() => {
     queueSynthesisRef.current = queueSynthesis;
@@ -757,6 +990,7 @@ export function useQueuedRunOrchestrator({
           completedAgentIds: [],
           failedAgentIds: [],
           finalizing: false,
+          approvalPausedAgentIds: [],
           previousRun: getPreviousRun() ?? undefined,
           prompt,
           queuedAgentIds: [],
@@ -778,6 +1012,7 @@ export function useQueuedRunOrchestrator({
           selectedAgentIds,
           skippedAgentIds,
           taskId,
+          workspacePath: getWorkspacePath(),
         }),
       );
 
@@ -827,13 +1062,14 @@ export function useQueuedRunOrchestrator({
   );
 
   const stopQueuedRuns = useCallback(() => {
-    for (const abortController of queueAbortControllersRef.current) {
-      abortController.abort();
+    for (const entry of queueAbortControllersRef.current) {
+      entry.controller.abort();
     }
     dispatchQueue({ type: "clearPendingWork" });
   }, [dispatchQueue]);
 
   return {
+    approveQueuedRequest,
     queueRun,
     queueState,
     stopQueuedRuns,

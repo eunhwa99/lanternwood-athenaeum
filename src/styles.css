@@ -43,9 +43,10 @@
       "skills"
       "library"
       "input"
+      "approval"
       "queue"
       "inspector";
-    grid-template-rows: auto auto auto auto auto auto auto auto auto auto;
+    grid-template-rows: auto auto auto auto auto auto auto auto auto auto auto;
     align-content: start;
     justify-content: center;
     gap: 16px;
@@ -754,6 +755,7 @@
         "context results skills"
         "library library library"
         "input input input"
+        "approval approval approval"
         "queue queue queue"
         "inspector inspector inspector";
     }
@@ -929,6 +931,44 @@
     background: rgba(12, 20, 24, 0.86);
     color: #f5eddb;
     padding: 12px 14px;
+  }
+
+  .permission-request-panel {
+    grid-area: approval;
+    display: flex;
+    align-items: start;
+    justify-content: space-between;
+    gap: 14px;
+    width: 100%;
+    border: 1px solid rgba(228, 185, 105, 0.38);
+    border-radius: 8px;
+    background: rgba(35, 43, 40, 0.86);
+    box-shadow: inset 0 0 0 1px rgba(245, 210, 139, 0.08);
+    padding: 14px;
+  }
+
+  .permission-request-panel h2 {
+    margin-bottom: 6px;
+    color: #f5d28b;
+    font-size: 0.98rem;
+  }
+
+  .permission-request-panel p {
+    margin-bottom: 0;
+    color: #e6dcc7;
+    font-size: 0.88rem;
+    overflow-wrap: anywhere;
+  }
+
+  .permission-blocked-action {
+    margin-top: 8px;
+    border-left: 3px solid rgba(228, 185, 105, 0.72);
+    padding-left: 10px;
+  }
+
+  .permission-request-panel button {
+    flex: 0 0 auto;
+    padding: 10px 14px;
   }
 
   .work-queue {
@@ -1468,6 +1508,7 @@
         "scene skills"
         "library library"
         "input input"
+        "approval approval"
         "queue queue";
       align-items: start;
       gap: 8px;
@@ -1506,6 +1547,7 @@
         "scene inspector skills"
         "library library library"
         "input input input"
+        "approval approval approval"
         "queue queue queue";
     }
   }
@@ -1535,6 +1577,10 @@
     .workspace-panel,
     .workspace-context-grid {
       grid-template-columns: 1fr;
+    }
+
+    .permission-request-panel {
+      flex-direction: column;
     }
 
     .workspace-write-toggle {

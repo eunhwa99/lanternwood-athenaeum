@@ -58,6 +58,18 @@ describe("codex http guards", () => {
     ).toEqual({ message: "Forbidden origin", ok: false, status: 403 });
   });
 
+  it("rejects browser cross-site POSTs even when the origin header is allowed", () => {
+    expect(
+      validateCodexPostRequest({
+        contentType: "application/json",
+        expectedToken: "dev-token",
+        fetchSite: "cross-site",
+        origin: "http://127.0.0.1:5173",
+        token: "dev-token",
+      }),
+    ).toEqual({ message: "Forbidden origin", ok: false, status: 403 });
+  });
+
   it("rejects missing request tokens when a token is configured", () => {
     expect(
       validateCodexPostRequest({
