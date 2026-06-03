@@ -3326,18 +3326,19 @@ describe("AppShell", () => {
        (state, item) => reduceAgentEvent(state, item),
        createInitialRunState(AGENTS),
      );
-     const state = updateTask(withEvents, "task-done", {
-       completedAt: "2026-05-28T00:00:05.000Z",
-       finalOutput: "Done",
-       status: "done",
-     });
-
-  expect(latestPermissionRequest(state)).toMatchObject({
-       approvalToken: "approval-pending",
-       taskId: "task-pending",
-     });
+  const state = updateTask(withEvents, "task-done", {
+    completedAt: "2026-05-28T00:00:05.000Z",
+    finalOutput: "Done",
+    status: "done",
   });
 
+    expect(latestPermissionRequest(state)).toMatchObject({
+      approvalToken: "approval-pending",
+      taskId: "task-pending",
+    });
+  });
+
+  it("loads workspace metadata and skill hints into the dashboard", async () => {
      const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
        const url = String(input);
        const body = url.endsWith("/api/workspaces")
@@ -3380,9 +3381,9 @@ describe("AppShell", () => {
      expect(screen.getByRole("region", { name: "Workspace context" })).toHaveTextContent(
        ".agents/lanternwood/agents/build-scribe/agent.json",
      );
-     expect(screen.getByRole("region", { name: "Run results" })).toHaveTextContent("src/App.tsx");
-     expect(screen.getByRole("region", { name: "Skill discovery" })).toHaveTextContent("build-helper");
-   });
+  expect(screen.getByRole("region", { name: "Run results" })).toHaveTextContent("src/App.tsx");
+  expect(screen.getByRole("region", { name: "Skill discovery" })).toHaveTextContent("build-helper");
+  });
 
   it("preserves the recent repo:branch label when inspecting a launched worktree", async () => {
     const launchedWorkspacePath = "/home/eunhwapark/IdeaProjects/.lanternwood-worktrees/drive-abc123/feature-branch-launcher-def456";

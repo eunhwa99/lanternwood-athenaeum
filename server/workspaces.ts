@@ -681,9 +681,10 @@ async function syncDetachedManagedWorktree(
   workspacePath: string,
   branch: string,
 ) {
-  const targetRef = (await branchExistsLocally(runGit, repositoryPath, branch))
+  const localBranchExists = await branchExistsLocally(runGit, repositoryPath, branch);
+  const targetRef = localBranchExists
     ? branch
-    : (await ensureRemoteBranchRef(runGit, repositoryPath, branch))
+    : (await ensureRemoteBranchRef(runGit, repositoryPath, branch, localBranchExists))
       ? `refs/remotes/origin/${branch}`
       : undefined;
 
@@ -876,7 +877,11 @@ export async function launchBranchWorktree(
       } else if (remoteBranchExists) {
         await runGit(
           "git",
-          branchAlreadyCheckedOut ? ["worktree", "add", "--detach", workspacePath, `refs/remotes/origin/${branch}`] : ["worktree", "add", workspacePath, `refs/remotes/origin/${branch}`],
+          branchAlreadyCheckedOut
+            ? ["worktree", "add", "--detach", workspacePath, `refs/remotes/origin/${branch}`]
+            : localBranchExists
+              ? ["worktree", "add", workspacePath, `refs/remotes/origin/${branch}`]
+              : ["worktree", "add", "-b", branch, workspacePath, `refs/remotes/origin/${branch}`],
           { cwd: repositoryPath },
         );
       } else {

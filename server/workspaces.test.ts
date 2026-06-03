@@ -1455,12 +1455,6 @@ describe("branch worktree launch", () => {
     const repository = await createRepository(root, "demo");
     const resolvedRepository = await realpath(repository);
     const commonGitDirectory = join(resolvedRepository, ".git");
-    const expectedWorkspacePath = worktreePathForBranch(
-      join(await realpath(root), ".lanternwood-worktrees"),
-      resolvedRepository,
-      "feature/x",
-      commonGitDirectory,
-    );
     const execFile = vi.fn(async (_file: string, args: string[]) => {
       const command = args.join(" ");
       const identityResponse = repositoryIdentityResponse(command, resolvedRepository, commonGitDirectory);
