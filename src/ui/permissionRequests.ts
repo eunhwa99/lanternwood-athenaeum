@@ -26,25 +26,27 @@ function payloadString(event: RunState["timeline"][number], key: string) {
 }
 
 export function latestPermissionRequest(state: RunState): PermissionRequestView | null {
+  const taskCompleteByManager = new Set<string>();
+  const resolvedByAgent = new Set<string>();
+
   for (let index = state.timeline.length - 1; index >= 0; index -= 1) {
     const event = state.timeline[index];
+    const eventAgentKey = `${event.taskId}\u0000${event.agentId}`;
 
     if (event.type !== "approval.requested") {
+      if (event.type === "agent.paused" || event.type === "permission.reviewed") {
+        continue;
+      }
+
+      if (event.agentId === "luma" && ["agent.done", "agent.failed"].includes(event.type)) {
+        taskCompleteByManager.add(event.taskId);
+      }
+
+      resolvedByAgent.add(eventAgentKey);
       continue;
     }
 
-    const hasLaterRetryEvent = state.timeline.slice(index + 1).some((laterEvent) => {
-      if (laterEvent.taskId !== event.taskId || ["agent.paused", "permission.reviewed"].includes(laterEvent.type)) {
-        return false;
-      }
-
-      return (
-        laterEvent.agentId === event.agentId ||
-        (laterEvent.agentId === "luma" && (laterEvent.type === "agent.done" || laterEvent.type === "agent.failed"))
-      );
-    });
-
-    if (hasLaterRetryEvent) {
+    if (taskCompleteByManager.has(event.taskId) || resolvedByAgent.has(eventAgentKey)) {
       continue;
     }
 

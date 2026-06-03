@@ -105,6 +105,7 @@ import { previewText } from "./runDetails";
  const defaultRunAdapter = createDefaultRunAdapter();
  const defaultRunMode = import.meta.env.VITE_RUN_ADAPTER === "codex" ? "codex" : "mock";
  const COMPLETED_TASK_PREVIEW_LIMIT = 5;
+ const MAX_TRACKED_TASK_EVENTS = 12;
  const RECENT_WORKSPACES_STORAGE_KEY = "lanternwood.recentWorkspaces";
  const preferredWorkspaceNames = ["lanternwood-athenaeum", "drive", "code", "MCPContentSearch"];
 
@@ -1119,16 +1120,50 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
     }
   }
 
-   function setRunStateSynced(nextState: RunState | ((current: RunState) => RunState)) {
-     setRunState((current) => {
-       const next = typeof nextState === "function" ? nextState(current) : nextState;
-       runStateRef.current = next;
-       return next;
-     });
-   }
+  function setRunStateSynced(nextState: RunState | ((current: RunState) => RunState)) {
+   setRunState((current) => {
+     const next = typeof nextState === "function" ? nextState(current) : nextState;
+      runStateRef.current = next;
+     return next;
+    });
+  }
+
+  function pruneTaskEventHistory() {
+    const activeTaskIds = new Set(
+      runStateRef.current.tasks.filter((task) => task.status === "routing" || task.status === "running" || task.status === "synthesizing").map((task) => task.taskId),
+    );
+    const next = new Map(taskEventsRef.current);
+
+    for (const taskId of next.keys()) {
+      if (next.size <= MAX_TRACKED_TASK_EVENTS || activeTaskIds.has(taskId)) {
+        continue;
+      }
+
+      next.delete(taskId);
+    }
+
+    while (next.size > MAX_TRACKED_TASK_EVENTS) {
+      const taskId = next.keys().next().value;
+
+      if (taskId === undefined) {
+        break;
+      }
+
+      next.delete(taskId);
+    }
+
+    taskEventsRef.current = next;
+  }
+
+  function resetTaskEventHistory(taskId?: string) {
+    taskEventsRef.current = taskId ? new Map([[taskId, []]]) : new Map();
+  }
 
    function recordTaskEvent(event: AgentEvent) {
-     taskEventsRef.current.set(event.taskId, [...(taskEventsRef.current.get(event.taskId) ?? []), event]);
+     const next = new Map(taskEventsRef.current);
+     next.set(event.taskId, [...(next.get(event.taskId) ?? []), event]);
+     taskEventsRef.current = next;
+     pruneTaskEventHistory();
    }
 
    function commitEvent(event: AgentEvent, transform?: (state: RunState) => RunState) {
@@ -1148,8 +1183,10 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
      prompt: string,
      runOptions: Pick<RunAdapterOptions, "approvalAgentId" | "approvalToken" | "sandboxMode" | "taskId" | "workspacePath"> = {},
    ) {
+     const taskIdSeed = createTaskId(prompt);
      const runToken = Symbol("run");
      activeRunRef.current = runToken;
+     resetTaskEventHistory(taskIdSeed);
      const nextInitialState = createInitialRunState(AGENTS);
      runStateRef.current = nextInitialState;
      setRunState(nextInitialState);
@@ -1158,7 +1195,7 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
 
      const abortController = new AbortController();
      abortControllerRef.current = abortController;
-     let taskId = createTaskId(prompt);
+     let taskId = taskIdSeed;
      const workspacePath = Object.hasOwn(runOptions, "workspacePath") ? runOptions.workspacePath : selectedWorkspacePath();
      let sawTaskCreated = false;
      const runEvents: AgentEvent[] = [];
@@ -1178,10 +1215,11 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
            return;
          }
 
-         if (event.type === "task.created") {
-           taskId = event.taskId;
-           sawTaskCreated = true;
-         }
+        if (event.type === "task.created") {
+          taskId = event.taskId;
+          sawTaskCreated = true;
+          resetTaskEventHistory(taskId);
+        }
 
          runEvents.push(event);
          recordTaskEvent(event);
@@ -1238,18 +1276,21 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
        if (activeRunRef.current === runToken) {
          activeRunRef.current = null;
        }
-       if (abortControllerRef.current === abortController) {
-         abortControllerRef.current = null;
-       }
-       if (activeRunRef.current === null) {
-         setIsRunning(false);
-       }
-     }
-   }
+      if (abortControllerRef.current === abortController) {
+        abortControllerRef.current = null;
+      }
+      if (activeRunRef.current === null) {
+        setIsRunning(false);
+      }
 
-   function stopRun() {
-     abortControllerRef.current?.abort();
-     stopQueuedRuns();
+      resetTaskEventHistory();
+    }
+  }
+
+  function stopRun() {
+    abortControllerRef.current?.abort();
+    stopQueuedRuns();
+    resetTaskEventHistory();
      setRunStateSynced((current) => {
        const now = new Date().toISOString();
        let next = current;
@@ -1475,7 +1516,28 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
            initialTab={drawer.tab}
            isOpen
            key={`${drawer.tab}-${drawer.agentId ?? "all"}-${drawer.taskId ?? "latest"}`}
-           onClose={() => setDrawer((current) => ({ ...current, isOpen: false }))}
+           onClose={() => {
+             setDrawer((current) => ({ ...current, isOpen: false }));
+             window.setTimeout(() => {
+               const libraryStage = document.querySelector<HTMLElement>(".library-stage");
+               if (typeof libraryStage?.scrollTo === "function") {
+                 try {
+                   libraryStage.scrollTo({ top: 0, left: 0, behavior: "auto" });
+                 } catch {
+                   libraryStage.scrollTop = 0;
+                 }
+               } else if (libraryStage) {
+                 libraryStage.scrollTop = 0;
+               }
+               if (typeof window.scrollTo === "function") {
+                 try {
+                   window.scrollTo(0, 0);
+                 } catch {
+                   // jsdom scrollTo is not implemented in test environments.
+                 }
+               }
+             }, 0);
+           }}
            runMode={runMode}
            selectedAgentId={drawer.agentId}
            selectedTaskId={drawer.taskId}
