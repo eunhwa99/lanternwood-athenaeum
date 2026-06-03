@@ -520,6 +520,24 @@
     gap: 6px;
   }
 
+  .workspace-launch-fields {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .workspace-launcher-controls {
+    display: grid;
+    gap: 8px;
+  }
+
+  .workspace-launcher-controls summary {
+    cursor: pointer;
+    color: #d8c781;
+    font-size: 0.78rem;
+    font-weight: 700;
+  }
+
   .workspace-write-toggle {
     display: inline-flex !important;
     align-items: center;
@@ -631,7 +649,8 @@
   }
 
   .workspace-actions button {
-    flex: 1 1 145px;
+    flex: 1 1 0;
+    min-width: 0;
   }
 
   .workspace-panel button,
@@ -1581,6 +1600,17 @@
 
     .permission-request-panel {
       flex-direction: column;
+    .workspace-launch-fields {
+      grid-template-columns: 1fr;
+    }
+
+    .workspace-actions {
+      display: grid;
+      grid-template-columns: 1fr;
+    }
+
+    .workspace-actions button {
+      width: 100%;
     }
 
     .workspace-write-toggle {

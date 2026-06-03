@@ -71,12 +71,14 @@ import { previewText } from "./runDetails";
    diffExcerpt?: string;
    gitStatus: string;
    packageScripts: Array<{ command: string; name: string }>;
+   repositoryPath?: string;
    verification?: {
      command: string;
      exitCode: number;
      output: string;
    };
    workspacePath: string;
+   workspaceLabel?: string;
  };
 
  type CodexSkillSummary = {
@@ -91,15 +93,31 @@ import { previewText } from "./runDetails";
    root?: string;
  };
 
+type RecentWorkspaceOption = WorkspaceOption & {
+  repositoryPath?: string;
+  repositoryVerified?: boolean;
+};
+
  type WorkspaceMetadataResponse = {
    metadata: WorkspaceMetadata;
    skills: CodexSkillSummary[];
  };
 
- type WorkspaceDiscoveryResponse = {
-   currentWorkspace?: string;
-   roots?: string[];
-   workspaces?: WorkspaceOption[];
+type WorkspaceDiscoveryResponse = {
+  currentWorkspaceLabel?: string;
+  currentWorkspaceRepositoryPath?: string;
+  currentWorkspace?: string;
+  roots?: string[];
+  workspaces?: WorkspaceOption[];
+};
+
+ type BranchWorktreeLaunchResponse = {
+   branch: string;
+   created: boolean;
+   detached?: boolean;
+   repositoryPath: string;
+   statusMessage?: string;
+   workspacePath: string;
  };
 
  const defaultRunAdapter = createDefaultRunAdapter();
@@ -161,13 +179,94 @@ import { previewText } from "./runDetails";
    return AGENTS.find((agent) => agent.id === agentId)?.displayName ?? agentId;
  }
 
- function workspaceNameFromPath(path: string) {
-   return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
- }
+function workspaceNameFromPath(path: string) {
+  return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
+}
+
+function normalizedWorkspaceName(name: string) {
+  return name.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase();
+}
+
+function repositoryNameFromManagedWorkspacePath(path: string) {
+  const pathSegments = path.split(/[\\/]/).filter(Boolean);
+  const managedRootIndex = pathSegments.lastIndexOf(".lanternwood-worktrees");
+  const repositoryDirectory = managedRootIndex >= 0 ? pathSegments[managedRootIndex + 1] : undefined;
+
+  if (!repositoryDirectory) {
+    return undefined;
+  }
+
+  const match = repositoryDirectory.match(/^(.*)-[0-9a-f]{6,}$/);
+  return match?.[1] || undefined;
+}
+
+function repositoryPathFromWorkspaceHint(
+  workspace: Pick<WorkspaceOption | RecentWorkspaceOption, "name" | "path">,
+  workspaceOptions: WorkspaceOption[],
+) {
+  return repositoryPathHintResolution(workspace, workspaceOptions).path;
+}
+
+function repositoryPathHintResolution(
+  workspace: Pick<WorkspaceOption | RecentWorkspaceOption, "name" | "path">,
+  workspaceOptions: WorkspaceOption[],
+) {
+  if (isManagedWorktreePath(workspace.path)) {
+    const repositoryNameFromPath = repositoryNameFromManagedWorkspacePath(workspace.path);
+
+    if (!repositoryNameFromPath) {
+      return { ambiguous: false, path: undefined };
+    }
+
+    const matches = workspaceOptions.filter((candidate) => normalizedWorkspaceName(candidate.name) === repositoryNameFromPath);
+
+    if (matches.length === 1) {
+      return { ambiguous: false, path: matches[0]?.path };
+    }
+
+    return { ambiguous: matches.length > 1, path: undefined };
+  }
+
+  const repositoryName = workspace.name.split(":")[0]?.trim();
+
+  if (repositoryName && repositoryName !== workspace.name) {
+    const matches = workspaceOptions.filter((candidate) => {
+      return candidate.name === repositoryName || normalizedWorkspaceName(candidate.name) === normalizedWorkspaceName(repositoryName);
+    });
+
+    if (matches.length === 1) {
+      return { ambiguous: false, path: matches[0]?.path };
+    }
+
+    if (matches.length > 1) {
+      return { ambiguous: true, path: undefined };
+    }
+  }
+
+  return { ambiguous: false, path: undefined };
+}
+
+function isManagedWorktreePath(path: string) {
+  return /[\\/]\.lanternwood-worktrees[\\/]/.test(path);
+}
+
+function unverifiedManagedWorkspaceLabel(path: string) {
+  return workspaceNameFromPath(path);
+}
+
+function managedWorkspaceDisplayLabel(repositoryPath: string, branch: string, detached?: boolean) {
+  return `${workspaceNameFromPath(repositoryPath)}:${branch}${detached ? " (detached)" : ""}`;
+}
+
+function isPathInsideRoot(path: string, root: string) {
+  const normalizedPath = path.replace(/\\/g, "/");
+  const normalizedRoot = root.replace(/\\/g, "/").replace(/\/+$/, "");
+  return normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot}/`);
+}
 
  function readRecentWorkspaces() {
    if (typeof window === "undefined") {
-     return [] as WorkspaceOption[];
+     return [] as RecentWorkspaceOption[];
    }
 
    try {
@@ -176,11 +275,15 @@ import { previewText } from "./runDetails";
      return Array.isArray(parsed)
        ? parsed
            .filter(
-             (item): item is WorkspaceOption =>
+             (item): item is RecentWorkspaceOption =>
                typeof item === "object" &&
                item !== null &&
-               typeof (item as WorkspaceOption).name === "string" &&
-               typeof (item as WorkspaceOption).path === "string",
+               typeof (item as RecentWorkspaceOption).name === "string" &&
+               typeof (item as RecentWorkspaceOption).path === "string" &&
+               (typeof (item as RecentWorkspaceOption).repositoryPath === "string" ||
+                 typeof (item as RecentWorkspaceOption).repositoryPath === "undefined") &&
+               (typeof (item as RecentWorkspaceOption).repositoryVerified === "boolean" ||
+                 typeof (item as RecentWorkspaceOption).repositoryVerified === "undefined"),
            )
            .slice(0, 5)
        : [];
@@ -189,7 +292,7 @@ import { previewText } from "./runDetails";
    }
  }
 
- function writeRecentWorkspaces(workspaces: WorkspaceOption[]) {
+ function writeRecentWorkspaces(workspaces: RecentWorkspaceOption[]) {
    if (typeof window !== "undefined") {
      window.localStorage.setItem(RECENT_WORKSPACES_STORAGE_KEY, JSON.stringify(workspaces.slice(0, 5)));
    }
@@ -969,23 +1072,35 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
   const [isRunning, setIsRunning] = useState(false);
   const [workspacePath, setWorkspacePath] = useState("");
   const [workspaceOptions, setWorkspaceOptions] = useState<WorkspaceOption[]>([]);
+  const [workspaceRoots, setWorkspaceRoots] = useState<string[]>([]);
+  const [currentWorkspaceLabel, setCurrentWorkspaceLabel] = useState<string | undefined>();
+  const [currentWorkspaceRepositoryPath, setCurrentWorkspaceRepositoryPath] = useState<string | undefined>();
   const [currentWorkspace, setCurrentWorkspace] = useState<string | undefined>();
   const [workspaceDiscoveryStatus, setWorkspaceDiscoveryStatus] = useState("Loading workspaces");
   const [workspaceSearch, setWorkspaceSearch] = useState("");
-  const [recentWorkspaces, setRecentWorkspaces] = useState<WorkspaceOption[]>(readRecentWorkspaces);
+  const [repositoryPath, setRepositoryPath] = useState("");
+  const [pendingSelectedRepositoryPath, setPendingSelectedRepositoryPath] = useState<string | null>(null);
+  const [branchName, setBranchName] = useState("");
+  const [isLaunchingWorktree, setIsLaunchingWorktree] = useState(false);
+  const [worktreeLaunchStatus, setWorktreeLaunchStatus] = useState("");
+  const [launchedWorktree, setLaunchedWorktree] = useState<BranchWorktreeLaunchResponse | null>(null);
+  const [recentWorkspaces, setRecentWorkspaces] = useState<RecentWorkspaceOption[]>(readRecentWorkspaces);
   const [allowWorkspaceWrite, setAllowWorkspaceWrite] = useState(true);
   const [workspaceMetadata, setWorkspaceMetadata] = useState<WorkspaceMetadata | null>(null);
   const [workspaceContextStatus, setWorkspaceContextStatus] = useState("Not inspected");
   const [discoveredSkills, setDiscoveredSkills] = useState<CodexSkillSummary[]>([]);
+  const [pendingSelectedWorkspaceHint, setPendingSelectedWorkspaceHint] = useState<RecentWorkspaceOption | null>(null);
    const [drawer, setDrawer] = useState<DrawerState>({
      isOpen: false,
      tab: "reports",
    });
-   const runStateRef = useRef<RunState>(initialState);
-   const abortControllerRef = useRef<AbortController | null>(null);
-   const activeRunRef = useRef<symbol | null>(null);
-   const taskEventsRef = useRef<Map<string, AgentEvent[]>>(new Map());
-   const previousRunRef = useRef<PreviousRunContext | null>(null);
+  const runStateRef = useRef<RunState>(initialState);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const activeRunRef = useRef<symbol | null>(null);
+  const hasExplicitRepositorySelectionRef = useRef(false);
+  const isLaunchingWorktreeRef = useRef(false);
+  const taskEventsRef = useRef<Map<string, AgentEvent[]>>(new Map());
+  const previousRunRef = useRef<PreviousRunContext | null>(null);
    const queuedRunAdapter = supportsQueuedRuns(runAdapter) ? runAdapter : null;
 	   const { approveQueuedRequest, queueRun, stopQueuedRuns } = useQueuedRunOrchestrator({
      commitEvent,
@@ -1004,11 +1119,83 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
   const inputIsRunning = isRunning || hasQueuedWork;
   const permissionRequest = latestPermissionRequest(runState);
 
-  const pinnedWorkspaces = useMemo(() => {
-    const selected = new Map<string, WorkspaceOption>();
+  const repositoryPathForCurrentWorkspace = useMemo(() => {
+    if (!currentWorkspace) {
+      return undefined;
+    }
 
-    if (currentWorkspace) {
-      selected.set(currentWorkspace, { name: workspaceNameFromPath(currentWorkspace), path: currentWorkspace });
+    const discoveredRepositoryPath =
+      currentWorkspaceRepositoryPath &&
+      !isManagedWorktreePath(currentWorkspaceRepositoryPath) &&
+      workspaceRoots.some((root) => isPathInsideRoot(currentWorkspaceRepositoryPath, root))
+        ? currentWorkspaceRepositoryPath
+        : undefined;
+
+    if (discoveredRepositoryPath) {
+      return discoveredRepositoryPath;
+    }
+
+    const recentRepositoryPath = !isManagedWorktreePath(currentWorkspace)
+      ? recentWorkspaces.find((workspace) => workspace.path === currentWorkspace)?.repositoryPath
+      : undefined;
+
+    if (recentRepositoryPath && workspaceRoots.some((root) => isPathInsideRoot(recentRepositoryPath, root))) {
+      return recentRepositoryPath;
+    }
+
+    return workspaceOptions.some((workspace) => workspace.path === currentWorkspace) ? currentWorkspace : undefined;
+  }, [currentWorkspace, currentWorkspaceRepositoryPath, recentWorkspaces, workspaceOptions, workspaceRoots]);
+
+  const currentWorkspaceIsAllowed = useMemo(() => {
+    if (!currentWorkspace) {
+      return false;
+    }
+
+    if (isManagedWorktreePath(currentWorkspace)) {
+      return Boolean(repositoryPathForCurrentWorkspace);
+    }
+
+    return workspaceRoots.some((root) => isPathInsideRoot(currentWorkspace, root));
+  }, [currentWorkspace, repositoryPathForCurrentWorkspace, workspaceRoots]);
+
+  const currentWorkspaceSelectionPath = useMemo(() => {
+    if (!currentWorkspace) {
+      return undefined;
+    }
+
+    return currentWorkspaceIsAllowed ? currentWorkspace : repositoryPathForCurrentWorkspace;
+  }, [currentWorkspace, currentWorkspaceIsAllowed, repositoryPathForCurrentWorkspace]);
+
+  const currentWorkspaceSelectionLabel = useMemo(() => {
+    if (!currentWorkspaceSelectionPath) {
+      return undefined;
+    }
+
+    if (currentWorkspaceSelectionPath === currentWorkspace) {
+      return currentWorkspaceLabel ?? workspaceNameFromPath(currentWorkspaceSelectionPath);
+    }
+
+    if (isManagedWorktreePath(currentWorkspaceSelectionPath)) {
+      return unverifiedManagedWorkspaceLabel(currentWorkspaceSelectionPath);
+    }
+
+    return (
+      recentWorkspaces.find((workspace) => workspace.path === currentWorkspaceSelectionPath)?.name ??
+      workspaceOptions.find((workspace) => workspace.path === currentWorkspaceSelectionPath)?.name ??
+      workspaceNameFromPath(currentWorkspaceSelectionPath)
+    );
+  }, [currentWorkspace, currentWorkspaceLabel, currentWorkspaceSelectionPath, recentWorkspaces, workspaceOptions]);
+
+  const pinnedWorkspaces = useMemo(() => {
+    const selected = new Map<string, WorkspaceOption | RecentWorkspaceOption>();
+
+    if (currentWorkspaceSelectionPath) {
+      selected.set(currentWorkspaceSelectionPath, {
+        name: currentWorkspaceSelectionLabel ?? workspaceNameFromPath(currentWorkspaceSelectionPath),
+        path: currentWorkspaceSelectionPath,
+        repositoryPath:
+          currentWorkspaceSelectionPath === currentWorkspace ? repositoryPathForCurrentWorkspace : undefined,
+      });
     }
 
     for (const preferredName of preferredWorkspaceNames) {
@@ -1020,7 +1207,13 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
     }
 
     return Array.from(selected.values()).slice(0, 6);
-  }, [currentWorkspace, workspaceOptions]);
+  }, [
+    currentWorkspace,
+    currentWorkspaceSelectionLabel,
+    currentWorkspaceSelectionPath,
+    repositoryPathForCurrentWorkspace,
+    workspaceOptions,
+  ]);
 
   const filteredWorkspaceOptions = useMemo(() => {
     const search = workspaceSearch.trim().toLocaleLowerCase();
@@ -1031,6 +1224,58 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
     return options.slice(0, 8);
   }, [workspaceOptions, workspaceSearch]);
 
+  const activeWorkspaceLabel = useMemo(() => {
+    const selectedPath = workspacePath.trim() || undefined;
+
+    if (!selectedPath) {
+      return undefined;
+    }
+
+    if (currentWorkspaceLabel && selectedPath === currentWorkspace) {
+      return currentWorkspaceLabel;
+    }
+
+    if (workspaceMetadata?.workspacePath === selectedPath && workspaceMetadata.workspaceLabel) {
+      return workspaceMetadata.workspaceLabel;
+    }
+
+    const selectedRecentWorkspace =
+      recentWorkspaces.find((workspace) => workspace.path === selectedPath) ??
+      pinnedWorkspaces.find((workspace) => workspace.path === selectedPath);
+    const verifiedManagedRecentLabel =
+      recentWorkspaces.find((workspace) => workspace.path === selectedPath && workspace.repositoryVerified)?.name ??
+      pinnedWorkspaces.find((workspace) => workspace.path === selectedPath && "repositoryVerified" in workspace && workspace.repositoryVerified)?.name;
+    const resolvedManagedRecentLabel =
+      selectedRecentWorkspace &&
+      repositoryPath.trim() &&
+      repositoryPathFromWorkspaceHint(selectedRecentWorkspace, workspaceOptions) === repositoryPath.trim()
+        ? selectedRecentWorkspace.name
+        : undefined;
+
+    if (isManagedWorktreePath(selectedPath) && launchedWorktree?.workspacePath !== selectedPath) {
+      return verifiedManagedRecentLabel ?? resolvedManagedRecentLabel ?? unverifiedManagedWorkspaceLabel(selectedPath);
+    }
+
+    return (
+      recentWorkspaces.find((workspace) => workspace.path === selectedPath)?.name ??
+      pinnedWorkspaces.find((workspace) => workspace.path === selectedPath)?.name ??
+      workspaceOptions.find((workspace) => workspace.path === selectedPath)?.name ??
+      (launchedWorktree?.workspacePath === selectedPath
+        ? managedWorkspaceDisplayLabel(launchedWorktree.repositoryPath, launchedWorktree.branch, launchedWorktree.detached)
+        : undefined)
+    );
+  }, [
+    currentWorkspace,
+    currentWorkspaceLabel,
+      launchedWorktree,
+      pinnedWorkspaces,
+      repositoryPath,
+      recentWorkspaces,
+    workspaceMetadata,
+    workspaceOptions,
+    workspacePath,
+  ]);
+
   function selectedWorkspacePath() {
     return workspacePath.trim() || undefined;
   }
@@ -1038,6 +1283,17 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
   function selectedSandboxMode(): RunAdapterOptions["sandboxMode"] {
     return allowWorkspaceWrite ? "workspace-write" : "read-only";
   }
+
+  const allowedRepositoryPath = useCallback(
+    (candidate: string | undefined) => {
+      if (!candidate || isManagedWorktreePath(candidate)) {
+        return undefined;
+      }
+
+      return workspaceRoots.some((root) => isPathInsideRoot(candidate, root)) ? candidate : undefined;
+    },
+    [workspaceRoots],
+  );
 
   const codexRequestHeaders = useCallback(() => {
     return {
@@ -1048,15 +1304,64 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
     };
   }, []);
 
-  function rememberWorkspace(path: string, name = workspaceNameFromPath(path)) {
-    const nextRecent = [{ name, path }, ...recentWorkspaces.filter((workspace) => workspace.path !== path)].slice(0, 5);
+  function rememberWorkspace(workspace: RecentWorkspaceOption) {
+    const existingWorkspace = recentWorkspaces.find((candidate) => candidate.path === workspace.path);
+    const nextName =
+      isManagedWorktreePath(workspace.path) && !workspace.repositoryPath
+        ? existingWorkspace?.name ?? workspace.name
+        : workspace.name;
+    const nextWorkspace = {
+      ...workspace,
+      name: nextName,
+      repositoryPath: workspace.repositoryPath ?? existingWorkspace?.repositoryPath,
+      repositoryVerified: workspace.repositoryVerified ?? existingWorkspace?.repositoryVerified,
+    };
+    const nextRecent = [nextWorkspace, ...recentWorkspaces.filter((candidate) => candidate.path !== workspace.path)].slice(0, 5);
     setRecentWorkspaces(nextRecent);
     writeRecentWorkspaces(nextRecent);
   }
 
-  function selectWorkspace(workspace: WorkspaceOption) {
+  function selectWorkspace(workspace: WorkspaceOption | RecentWorkspaceOption) {
+    const managedWorkspace = isManagedWorktreePath(workspace.path);
+    const hintResolution = managedWorkspace ? repositoryPathHintResolution(workspace, workspaceOptions) : { ambiguous: false, path: undefined };
+    const rootsReady = workspaceRoots.length > 0;
+    const persistedVerifiedRepositoryPath =
+      managedWorkspace && "repositoryVerified" in workspace && workspace.repositoryVerified && workspace.path !== currentWorkspace
+        ? workspace.repositoryPath
+        : undefined;
+    const verifiedManagedRepositoryPath = managedWorkspace
+      ? workspace.path === currentWorkspace
+        ? rootsReady
+          ? allowedRepositoryPath(repositoryPathForCurrentWorkspace)
+          : repositoryPathForCurrentWorkspace
+        : undefined
+      : undefined;
+    const repositoryPathForWorkspace = managedWorkspace
+      ? workspace.path === currentWorkspace
+        ? verifiedManagedRepositoryPath
+        : hintResolution.path ??
+          verifiedManagedRepositoryPath ??
+          (!hintResolution.ambiguous ? persistedVerifiedRepositoryPath : undefined)
+      : workspace.path;
+    const nextRepositoryPath = managedWorkspace
+      ? allowedRepositoryPath(repositoryPathForWorkspace) ?? ""
+      : allowedRepositoryPath(workspace.path) ?? "";
+    hasExplicitRepositorySelectionRef.current = true;
+    setPendingSelectedWorkspaceHint(rootsReady ? null : { name: workspace.name, path: workspace.path, repositoryPath: repositoryPathForWorkspace });
+    setPendingSelectedRepositoryPath(rootsReady ? null : repositoryPathForWorkspace ?? null);
+    setRepositoryPath(rootsReady ? nextRepositoryPath : repositoryPathForWorkspace ?? "");
     setWorkspacePath(workspace.path);
-    rememberWorkspace(workspace.path, workspace.name);
+    rememberWorkspace({
+      name: workspace.name,
+      path: workspace.path,
+      repositoryPath: rootsReady ? nextRepositoryPath || undefined : repositoryPathForWorkspace,
+      repositoryVerified:
+        managedWorkspace
+          ? workspace.path === currentWorkspace
+            ? Boolean(verifiedManagedRepositoryPath)
+            : "repositoryVerified" in workspace && workspace.repositoryVerified === true && Boolean(rootsReady ? nextRepositoryPath : repositoryPathForWorkspace)
+          : Boolean(rootsReady ? nextRepositoryPath : repositoryPathForWorkspace),
+    });
   }
 
   const loadWorkspaceOptions = useCallback(async () => {
@@ -1075,7 +1380,13 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
 
       const result = (await response.json()) as WorkspaceDiscoveryResponse;
       const discovered = Array.isArray(result.workspaces) ? result.workspaces : [];
+      const roots = Array.isArray(result.roots) ? result.roots.filter((root): root is string => typeof root === "string") : [];
       setWorkspaceOptions(discovered);
+      setWorkspaceRoots(roots);
+      setCurrentWorkspaceLabel(typeof result.currentWorkspaceLabel === "string" ? result.currentWorkspaceLabel : undefined);
+      setCurrentWorkspaceRepositoryPath(
+        typeof result.currentWorkspaceRepositoryPath === "string" ? result.currentWorkspaceRepositoryPath : undefined,
+      );
       setCurrentWorkspace(typeof result.currentWorkspace === "string" ? result.currentWorkspace : undefined);
       setWorkspaceDiscoveryStatus(`${discovered.length} found`);
     } catch (error) {
@@ -1086,6 +1397,121 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
   useEffect(() => {
     void loadWorkspaceOptions();
   }, [loadWorkspaceOptions]);
+
+  useEffect(() => {
+    if (!hasExplicitRepositorySelectionRef.current && !repositoryPath.trim() && repositoryPathForCurrentWorkspace) {
+      setRepositoryPath(repositoryPathForCurrentWorkspace);
+    }
+  }, [repositoryPath, repositoryPathForCurrentWorkspace]);
+
+  useEffect(() => {
+    if (!workspacePath.trim() && currentWorkspaceSelectionPath) {
+      setWorkspacePath(currentWorkspaceSelectionPath);
+    }
+  }, [currentWorkspaceSelectionPath, workspacePath]);
+
+  useEffect(() => {
+    const pendingCurrentManagedRepositoryPath =
+      pendingSelectedWorkspaceHint &&
+      isManagedWorktreePath(pendingSelectedWorkspaceHint.path) &&
+      pendingSelectedWorkspaceHint.path === currentWorkspace
+        ? workspaceRoots.length === 0
+          ? repositoryPathForCurrentWorkspace
+          : allowedRepositoryPath(repositoryPathForCurrentWorkspace)
+        : undefined;
+
+    if (!pendingSelectedRepositoryPath || workspaceRoots.length === 0) {
+      if (!pendingSelectedWorkspaceHint || workspaceRoots.length === 0) {
+        return;
+      }
+
+      const recoveredRepositoryPath =
+        (isManagedWorktreePath(pendingSelectedWorkspaceHint.path)
+          ? pendingCurrentManagedRepositoryPath ?? repositoryPathFromWorkspaceHint(pendingSelectedWorkspaceHint, workspaceOptions)
+          : allowedRepositoryPath(pendingSelectedWorkspaceHint.repositoryPath) ?? allowedRepositoryPath(pendingSelectedWorkspaceHint.path)) ??
+        "";
+      setRepositoryPath((currentRepositoryPath) =>
+        currentRepositoryPath === "" || currentRepositoryPath === (pendingSelectedWorkspaceHint.repositoryPath ?? "")
+          ? recoveredRepositoryPath
+          : currentRepositoryPath,
+      );
+      setPendingSelectedWorkspaceHint(null);
+      return;
+    }
+
+    const validatedRepositoryPath =
+      (pendingSelectedWorkspaceHint
+        ? isManagedWorktreePath(pendingSelectedWorkspaceHint.path)
+          ? pendingCurrentManagedRepositoryPath ?? repositoryPathFromWorkspaceHint(pendingSelectedWorkspaceHint, workspaceOptions) ?? ""
+          : allowedRepositoryPath(pendingSelectedWorkspaceHint.path) ?? allowedRepositoryPath(pendingSelectedRepositoryPath) ?? ""
+        : allowedRepositoryPath(pendingSelectedRepositoryPath) ?? "");
+    setRepositoryPath((currentRepositoryPath) =>
+      currentRepositoryPath === pendingSelectedRepositoryPath || currentRepositoryPath === "" ? validatedRepositoryPath : currentRepositoryPath,
+    );
+    setPendingSelectedRepositoryPath(null);
+    setPendingSelectedWorkspaceHint(null);
+  }, [
+    allowedRepositoryPath,
+    currentWorkspace,
+    pendingSelectedRepositoryPath,
+    pendingSelectedWorkspaceHint,
+    repositoryPathForCurrentWorkspace,
+    workspaceOptions,
+    workspaceRoots,
+  ]);
+
+  async function launchWorktree() {
+    if (isLaunchingWorktreeRef.current) {
+      return;
+    }
+
+    if (workspaceRoots.length === 0 && (pendingSelectedRepositoryPath !== null || pendingSelectedWorkspaceHint)) {
+      setWorktreeLaunchStatus("Loading workspaces");
+      return;
+    }
+
+    isLaunchingWorktreeRef.current = true;
+    setIsLaunchingWorktree(true);
+    setWorktreeLaunchStatus("Launching");
+    setLaunchedWorktree(null);
+    setPendingSelectedRepositoryPath(null);
+
+    try {
+      const response = await fetch("/api/worktrees/launch", {
+        body: JSON.stringify({ branch: branchName, repositoryPath }),
+        headers: codexRequestHeaders(),
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+
+      const result = (await response.json()) as BranchWorktreeLaunchResponse;
+      setLaunchedWorktree(result);
+      hasExplicitRepositorySelectionRef.current = true;
+      setRepositoryPath(result.repositoryPath);
+      setWorkspacePath(result.workspacePath);
+      setWorkspaceMetadata(null);
+      setDiscoveredSkills([]);
+      setWorkspaceContextStatus("Not inspected");
+      rememberWorkspace({
+        name: managedWorkspaceDisplayLabel(result.repositoryPath, result.branch, result.detached),
+        path: result.workspacePath,
+        repositoryPath: result.repositoryPath,
+        repositoryVerified: true,
+      });
+      setWorktreeLaunchStatus(
+        result.statusMessage ?? (result.created ? `Created new worktree for ${result.branch}` : `Reused existing worktree for ${result.branch}`),
+      );
+    } catch (error) {
+      setLaunchedWorktree(null);
+      setWorktreeLaunchStatus(messageFromError(error));
+    } finally {
+      isLaunchingWorktreeRef.current = false;
+      setIsLaunchingWorktree(false);
+    }
+  }
 
   async function inspectWorkspace() {
     setWorkspaceContextStatus("Inspecting");
@@ -1105,7 +1531,42 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
       setWorkspaceMetadata(result.metadata);
       setDiscoveredSkills(result.skills);
       setWorkspacePath(result.metadata.workspacePath);
-      rememberWorkspace(result.metadata.workspacePath);
+      const existingWorkspace = recentWorkspaces.find((workspace) => workspace.path === result.metadata.workspacePath);
+      const selectedRepositoryValue = repositoryPath.trim();
+      const selectedManagedRepositoryPath =
+        result.metadata.workspacePath === selectedWorkspacePath()
+          ? allowedRepositoryPath(selectedRepositoryValue) ?? (workspaceRoots.length === 0 ? selectedRepositoryValue || undefined : undefined)
+          : undefined;
+      const verifiedMetadataRepositoryPath = allowedRepositoryPath(result.metadata.repositoryPath);
+      const pendingVerifiedMetadataRepositoryPath =
+        !verifiedMetadataRepositoryPath && workspaceRoots.length === 0 ? result.metadata.repositoryPath : undefined;
+      const verifiedExistingRepositoryPath =
+        !isManagedWorktreePath(result.metadata.workspacePath) && existingWorkspace?.repositoryVerified
+          ? allowedRepositoryPath(existingWorkspace.repositoryPath)
+          : undefined;
+      const inspectedRepositoryPath =
+        verifiedMetadataRepositoryPath ??
+        (isManagedWorktreePath(result.metadata.workspacePath) ? selectedManagedRepositoryPath : undefined) ??
+        pendingVerifiedMetadataRepositoryPath ??
+        verifiedExistingRepositoryPath;
+      const inspectedRepositoryVerified = Boolean(
+        verifiedMetadataRepositoryPath ??
+          pendingVerifiedMetadataRepositoryPath ??
+          (isManagedWorktreePath(result.metadata.workspacePath) ? selectedManagedRepositoryPath : undefined) ??
+          verifiedExistingRepositoryPath,
+      );
+      hasExplicitRepositorySelectionRef.current = true;
+      setPendingSelectedRepositoryPath(workspaceRoots.length === 0 ? inspectedRepositoryPath ?? null : null);
+      setRepositoryPath(inspectedRepositoryPath ?? "");
+      rememberWorkspace({
+        name:
+          result.metadata.workspaceLabel ??
+          (isManagedWorktreePath(result.metadata.workspacePath) ? existingWorkspace?.name : existingWorkspace?.name) ??
+          workspaceNameFromPath(result.metadata.workspacePath),
+        path: result.metadata.workspacePath,
+        repositoryPath: inspectedRepositoryPath,
+        repositoryVerified: inspectedRepositoryVerified,
+      });
       setWorkspaceContextStatus("Loaded");
     } catch (error) {
       setWorkspaceContextStatus(messageFromError(error));
@@ -1318,7 +1779,8 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
              <h2>Workspace Launcher</h2>
              <span>{workspaceDiscoveryStatus}</span>
            </header>
-           <p>{workspacePath.trim() ? workspacePath.trim() : "Lanternwood repository default"}</p>
+           {activeWorkspaceLabel ? <p aria-label="Selected workspace label">{activeWorkspaceLabel}</p> : null}
+           {workspacePath.trim() ? <p>{workspacePath.trim()}</p> : null}
            {pinnedWorkspaces.length > 0 ? (
              <div className="workspace-picker-group">
                <h3>Pinned</h3>
@@ -1355,57 +1817,92 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
                </div>
              </div>
            ) : null}
-           <label>
-             <span>Workspace search</span>
-             <input
-               aria-label="Workspace search"
-               onChange={(event) => setWorkspaceSearch(event.target.value)}
-               placeholder="drive, code, MCPContentSearch"
-               value={workspaceSearch}
-             />
-           </label>
-           {filteredWorkspaceOptions.length > 0 ? (
-             <div className="workspace-chip-row workspace-search-results">
-               {filteredWorkspaceOptions.map((workspace) => (
-                 <button
-                   aria-label={`Select workspace ${workspace.name}`}
-                   key={workspace.path}
-                   onClick={() => selectWorkspace(workspace)}
-                   type="button"
-                 >
-                   <span>{workspace.name}</span>
-                   <small>{workspace.path}</small>
-                 </button>
-               ))}
+           <details className="workspace-launcher-controls">
+             <summary>Branch launcher</summary>
+             <div className="workspace-launch-fields">
+               <label>
+                 <span>Repository</span>
+                <input
+                  aria-label="Repository"
+                  onChange={(event) => {
+                    hasExplicitRepositorySelectionRef.current = true;
+                    setPendingSelectedRepositoryPath(null);
+                    setPendingSelectedWorkspaceHint(null);
+                    setRepositoryPath(event.target.value);
+                  }}
+                  placeholder="~/IdeaProjects/drive"
+                  value={repositoryPath}
+                />
+               </label>
+               <label>
+                 <span>Branch name</span>
+                 <input
+                   aria-label="Branch name"
+                   onChange={(event) => setBranchName(event.target.value)}
+                   placeholder="feature/branch-launcher"
+                   value={branchName}
+                 />
+               </label>
              </div>
-           ) : null}
-           <details className="workspace-advanced">
-             <summary>Advanced path</summary>
+             {worktreeLaunchStatus ? <p>{worktreeLaunchStatus}</p> : null}
+             {launchedWorktree ? <p aria-label="Launched worktree path">{launchedWorktree.workspacePath}</p> : null}
              <label>
-               <span>Target workspace</span>
+               <span>Workspace search</span>
                <input
-                 aria-label="Target workspace"
-                 placeholder="~/IdeaProjects/drive"
-                 value={workspacePath}
-                 onChange={(event) => setWorkspacePath(event.target.value)}
+                 aria-label="Workspace search"
+                 onChange={(event) => setWorkspaceSearch(event.target.value)}
+                 placeholder="drive, code, MCPContentSearch"
+                 value={workspaceSearch}
                />
              </label>
+             {filteredWorkspaceOptions.length > 0 ? (
+               <div className="workspace-chip-row workspace-search-results">
+                 {filteredWorkspaceOptions.map((workspace) => (
+                   <button
+                     aria-label={`Select workspace ${workspace.name}`}
+                     key={workspace.path}
+                     onClick={() => selectWorkspace(workspace)}
+                     type="button"
+                   >
+                     <span>{workspace.name}</span>
+                     <small>{workspace.path}</small>
+                   </button>
+                 ))}
+               </div>
+             ) : null}
+             <details className="workspace-advanced">
+               <summary>Advanced path</summary>
+               <label>
+                 <span>Target workspace</span>
+                 <input
+                   aria-label="Target workspace"
+                   placeholder="~/IdeaProjects/drive"
+                   value={workspacePath}
+                   onChange={(event) => setWorkspacePath(event.target.value)}
+                 />
+               </label>
+             </details>
+             <label className="workspace-write-toggle">
+               <input
+                 aria-label="Allow workspace writes"
+                 checked={allowWorkspaceWrite}
+                 onChange={(event) => setAllowWorkspaceWrite(event.target.checked)}
+                 type="checkbox"
+               />
+               <span>Allow workspace writes</span>
+             </label>
+             <div className="workspace-actions">
+               <button disabled={isLaunchingWorktree} onClick={() => void launchWorktree()} type="button">
+                 Launch worktree
+               </button>
+               <button onClick={() => void loadWorkspaceOptions()} type="button">
+                 Refresh workspaces
+               </button>
+             </div>
            </details>
-           <label className="workspace-write-toggle">
-             <input
-               aria-label="Allow workspace writes"
-               checked={allowWorkspaceWrite}
-               onChange={(event) => setAllowWorkspaceWrite(event.target.checked)}
-               type="checkbox"
-             />
-             <span>Allow workspace writes</span>
-           </label>
-           <div className="workspace-actions">
+           <div className="workspace-actions workspace-actions-primary">
              <button onClick={() => void inspectWorkspace()} type="button">
                Inspect workspace
-             </button>
-             <button onClick={() => void loadWorkspaceOptions()} type="button">
-               Refresh workspaces
              </button>
            </div>
 	         </section>

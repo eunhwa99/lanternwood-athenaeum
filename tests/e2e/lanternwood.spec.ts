@@ -585,6 +585,8 @@ test("creates a repo-local agent, reloads it into routing, and renders workspace
     .map((token) => (token.length <= 3 ? token.toUpperCase() : `${token.charAt(0).toUpperCase()}${token.slice(1)}`))
     .join(" ");
   const workspaceName = basename(process.cwd());
+  const launchedWorkspacePath = join(process.cwd(), "..", ".lanternwood-worktrees", "lanternwood-athenaeum-abc123", "feature-branch-launcher-def456");
+  let launchedRequestBody: { branch?: string; repositoryPath?: string } | null = null;
 
   await page.route("**/api/agents/draft", async (route) => {
     await route.fulfill({
@@ -634,7 +636,22 @@ test("creates a repo-local agent, reloads it into routing, and renders workspace
       status: 200,
     });
   });
+  await page.route("**/api/worktrees/launch", async (route) => {
+    launchedRequestBody = JSON.parse(route.request().postData() ?? "{}") as { branch?: string; repositoryPath?: string };
+    await route.fulfill({
+      body: JSON.stringify({
+        branch: "feature/branch-launcher",
+        created: true,
+        repositoryPath: process.cwd(),
+        statusMessage: "Created new worktree for feature/branch-launcher",
+        workspacePath: launchedWorkspacePath,
+      }),
+      contentType: "application/json",
+      status: 200,
+    });
+  });
   await page.route("**/api/workspace-metadata", async (route) => {
+    const requestedWorkspace = JSON.parse(route.request().postData() ?? "{}") as { workspacePath?: string };
     await route.fulfill({
       body: JSON.stringify({
         metadata: {
@@ -644,7 +661,7 @@ test("creates a repo-local agent, reloads it into routing, and renders workspace
           gitStatus: " M src/generated.ts",
           packageScripts: [{ command: "vitest run", name: "test" }],
           verification: { command: "npm test", exitCode: 0, output: "Tests passed" },
-          workspacePath: process.cwd(),
+          workspacePath: requestedWorkspace.workspacePath ?? process.cwd(),
         },
         skills: [
           {
@@ -662,8 +679,17 @@ test("creates a repo-local agent, reloads it into routing, and renders workspace
   try {
     await page.goto("/");
     await page.getByRole("button", { name: `Select workspace ${workspaceName}` }).click();
+    await page.getByText("Branch launcher").click();
+    await page.getByLabel("Branch name").fill("feature/branch-launcher");
+    await page.getByRole("button", { name: "Launch worktree" }).click();
+    await expect(page.getByRole("region", { name: "Workspace", exact: true })).toContainText(
+      "Created new worktree for feature/branch-launcher",
+    );
+    await expect(page.getByLabel("Target workspace")).toHaveValue(launchedWorkspacePath);
     await page.getByRole("button", { name: "Inspect workspace" }).click();
+    expect(launchedRequestBody).toEqual({ branch: "feature/branch-launcher", repositoryPath: process.cwd() });
     await expect(page.getByRole("region", { name: "Workspace context" })).toContainText("AGENTS.md");
+    await expect(page.getByRole("region", { name: "Workspace context" })).toContainText(launchedWorkspacePath);
     await expect(page.getByRole("region", { name: "Run results" })).toContainText("src/generated.ts");
     await expect(page.getByRole("region", { name: "Skill discovery" })).toContainText("build-helper");
 
