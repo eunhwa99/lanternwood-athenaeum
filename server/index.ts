@@ -15,8 +15,9 @@ import { loadGlobalAgents } from "./globalAgents";
 import { validatePreviousRun } from "./requestValidation";
 import { discoverCodexSkills } from "./skills";
 import { encodeAgentEvent } from "./sse";
-import { readWorkspaceMetadata } from "./workspaceMetadata";
-import { discoverWorkspaceOptions, resolveWorkspacePath } from "./workspaces";
+import { isManagedWorktreePath } from "./managedWorktreeMetadata";
+import { readWorkspaceMetadata, readWorkspaceProvenance } from "./workspaceMetadata";
+import { defaultGitExecFile, discoverWorkspaceOptions, launchBranchWorktree, resolveWorkspacePath } from "./workspaces";
 
 loadDotEnvFile();
 
@@ -29,7 +30,7 @@ type SpecialistId = string;
 const agentIdPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const codexRoutes = new Set(["/api/runs", "/api/agent-jobs", "/api/synthesis"]);
 const agentAuthoringRoutes = new Set(["/api/agents", "/api/agents/draft"]);
-const workspaceRoutes = new Set(["/api/workspace-metadata", "/api/workspaces"]);
+const workspaceRoutes = new Set(["/api/workspace-metadata", "/api/workspaces", "/api/worktrees/launch"]);
 
 type LanternwoodServerOptions = {
   approvalGate?: ApprovalGate;
@@ -209,12 +210,23 @@ export function createLanternwoodServer({
     if (path === "/api/workspaces") {
       globalAgents = await loadGlobalAgents();
       const discovered = await discoverWorkspaceOptions(globalAgents.automationPolicy.allowRoots);
+      const currentWorkspace = process.cwd();
+      const provenance: { repositoryPath?: string; workspaceLabel?: string } =
+        isManagedWorktreePath(currentWorkspace)
+          ? await resolveWorkspacePath(currentWorkspace, globalAgents.automationPolicy.allowRoots, {
+              execFile: defaultGitExecFile,
+            })
+              .then(() => readWorkspaceProvenance(currentWorkspace))
+              .catch(() => ({}))
+          : await readWorkspaceProvenance(currentWorkspace);
 
       response.writeHead(200, { "Content-Type": "application/json" });
       response.end(
         JSON.stringify({
           ...discovered,
-          currentWorkspace: process.cwd(),
+          currentWorkspace,
+          currentWorkspaceLabel: provenance.workspaceLabel,
+          currentWorkspaceRepositoryPath: provenance.repositoryPath,
         }),
       );
       return;
@@ -224,11 +236,37 @@ export function createLanternwoodServer({
       globalAgents = await loadGlobalAgents();
       const requestedWorkspacePath =
         typeof body.workspacePath === "string" && body.workspacePath.trim() ? body.workspacePath : process.cwd();
-      const resolvedWorkspacePath = await resolveWorkspacePath(requestedWorkspacePath, globalAgents.automationPolicy.allowRoots);
+      const resolvedWorkspacePath = await resolveWorkspacePath(requestedWorkspacePath, globalAgents.automationPolicy.allowRoots, {
+        execFile: defaultGitExecFile,
+      });
       const [metadata, skills] = await Promise.all([readWorkspaceMetadata(resolvedWorkspacePath), discoverCodexSkills()]);
 
       response.writeHead(200, { "Content-Type": "application/json" });
       response.end(JSON.stringify({ metadata, skills }));
+      return;
+    }
+
+    if (path === "/api/worktrees/launch") {
+      globalAgents = await loadGlobalAgents();
+      const launched = await launchBranchWorktree(
+        {
+          branch: typeof body.branch === "string" ? body.branch : "",
+          repositoryPath: typeof body.repositoryPath === "string" ? body.repositoryPath : "",
+        },
+        { allowRoots: globalAgents.automationPolicy.allowRoots },
+      );
+
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(
+        JSON.stringify({
+          ...launched,
+          statusMessage: launched.created
+            ? launched.detached
+              ? `Created detached worktree for ${launched.branch} because it is already checked out elsewhere`
+              : `Created new worktree for ${launched.branch}`
+            : `Reused existing worktree for ${launched.branch}`,
+        }),
+      );
       return;
     }
 
@@ -246,11 +284,13 @@ export function createLanternwoodServer({
     }
     if (typeof body.workspacePath === "string" && body.workspacePath.trim()) {
       globalAgents = await loadGlobalAgents();
-      workspacePath = await resolveWorkspacePath(body.workspacePath, globalAgents.automationPolicy.allowRoots);
+      workspacePath = await resolveWorkspacePath(body.workspacePath, globalAgents.automationPolicy.allowRoots, {
+        execFile: defaultGitExecFile,
+      });
     }
-  } catch {
+  } catch (error) {
     response.writeHead(400, { "Content-Type": "text/plain" });
-    response.end("Invalid JSON body, previousRun, or workspacePath");
+    response.end(error instanceof Error ? error.message : "Invalid JSON body, previousRun, or workspacePath");
     return;
   }
 

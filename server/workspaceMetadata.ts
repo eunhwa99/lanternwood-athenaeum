@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
-import { readdir, readFile, stat } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { readdir, readFile, realpath, stat } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
+import { isManagedWorktreePath, managedWorktreeLabel, readManagedWorktreeMetadata } from "./managedWorktreeMetadata";
 
 const execFileAsync = promisify(execFile);
 
@@ -11,12 +12,14 @@ export type WorkspaceMetadata = {
   diffExcerpt?: string;
   gitStatus: string;
   packageScripts: Array<{ command: string; name: string }>;
+  repositoryPath?: string;
   verification?: {
     command: string;
     exitCode: number;
     output: string;
   };
   workspacePath: string;
+  workspaceLabel?: string;
 };
 
 type WorkspaceMetadataOptions = {
@@ -84,6 +87,73 @@ async function defaultRunGit(workspacePath: string, args: string[]) {
   return stdout;
 }
 
+async function resolveWorkspaceRepositoryPath(workspacePath: string, git: (args: string[]) => Promise<string>) {
+  try {
+    const [repositoryRootOutput, commonGitDirectoryOutput] = await Promise.all([
+      git(["rev-parse", "--show-toplevel"]),
+      git(["rev-parse", "--git-common-dir"]),
+    ]);
+    const repositoryRoot = repositoryRootOutput.trim();
+    const commonGitDirectoryRaw = commonGitDirectoryOutput.trim();
+    const resolvedRepositoryRoot = await realpath(repositoryRoot).catch(() => repositoryRoot);
+    const commonGitDirectory = await realpath(
+      isAbsolute(commonGitDirectoryRaw) ? commonGitDirectoryRaw : resolve(workspacePath, commonGitDirectoryRaw),
+    ).catch(() => (isAbsolute(commonGitDirectoryRaw) ? commonGitDirectoryRaw : resolve(workspacePath, commonGitDirectoryRaw)));
+
+    return basename(commonGitDirectory) === ".git"
+      ? await realpath(dirname(commonGitDirectory)).catch(() => dirname(commonGitDirectory))
+      : resolvedRepositoryRoot;
+  } catch {
+    return undefined;
+  }
+}
+
+function parsePointedBranchNames(output: string) {
+  return output
+    .split("\n")
+    .map((entry) => entry.trim())
+    .filter((entry) => Boolean(entry) && !entry.startsWith("("));
+}
+
+export async function readWorkspaceProvenance(
+  workspacePath: string,
+  { runGit }: WorkspaceMetadataOptions = {},
+): Promise<{ repositoryPath?: string; workspaceLabel?: string }> {
+  const git = runGit ?? ((args: string[]) => defaultRunGit(workspacePath, args));
+  const liveRepositoryPath = await resolveWorkspaceRepositoryPath(workspacePath, git);
+  const repositoryPath = liveRepositoryPath;
+  let branchName = "";
+  let detached = false;
+  const metadata = isManagedWorktreePath(workspacePath) ? await readManagedWorktreeMetadata(workspacePath) : undefined;
+
+  if (isManagedWorktreePath(workspacePath)) {
+    branchName = await git(["branch", "--show-current"]).then((output) => output.trim()).catch(() => "");
+    detached = !branchName;
+  }
+
+  if (!branchName && isManagedWorktreePath(workspacePath)) {
+    const pointedBranches = await git(["branch", "--points-at", "HEAD", "--format", "%(refname:short)"])
+      .then(parsePointedBranchNames)
+      .catch(() => [] as string[]);
+
+    if (metadata && metadata.repositoryPath === repositoryPath && pointedBranches.includes(metadata.branch)) {
+      branchName = metadata.branch;
+    }
+
+    if (pointedBranches.length === 1) {
+      [branchName] = pointedBranches;
+    }
+  }
+
+  return {
+    repositoryPath,
+    workspaceLabel:
+      repositoryPath && branchName
+        ? `${managedWorktreeLabel({ branch: branchName, repositoryPath })}${detached ? " (detached)" : ""}`
+        : undefined,
+  };
+}
+
 export async function readWorkspaceMetadata(
   workspacePath: string,
   { runGit }: WorkspaceMetadataOptions = {},
@@ -93,10 +163,11 @@ export async function readWorkspaceMetadata(
     ...((await pathExists(join(workspacePath, "AGENTS.md"))) ? ["AGENTS.md"] : []),
     ...(await collectFiles(join(workspacePath, ".agents"))).map((path) => `.agents/${path}`),
   ];
-  const [gitStatus, diffExcerpt, packageScripts] = await Promise.all([
+  const [gitStatus, diffExcerpt, packageScripts, provenance] = await Promise.all([
     git(["status", "--short"]).then((output) => output.trimEnd()).catch(() => ""),
     git(["diff", "--", "."]).then((output) => output.slice(0, 12_000)).catch(() => ""),
     readPackageScripts(workspacePath),
+    readWorkspaceProvenance(workspacePath, { runGit: git }),
   ]);
 
   return {
@@ -105,6 +176,8 @@ export async function readWorkspaceMetadata(
     diffExcerpt: diffExcerpt || undefined,
     gitStatus,
     packageScripts,
+    repositoryPath: provenance.repositoryPath,
     workspacePath,
+    workspaceLabel: provenance.workspaceLabel,
   };
 }
