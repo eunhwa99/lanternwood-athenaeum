@@ -1024,12 +1024,19 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
 
   const filteredWorkspaceOptions = useMemo(() => {
     const search = workspaceSearch.trim().toLocaleLowerCase();
+    const reservedPaths = new Set([
+      ...pinnedWorkspaces.map((workspace) => workspace.path),
+      ...recentWorkspaces.map((workspace) => workspace.path),
+    ]);
     const options = search
-      ? workspaceOptions.filter((workspace) => `${workspace.name} ${workspace.path}`.toLocaleLowerCase().includes(search))
-      : [];
+      ? workspaceOptions
+      : workspaceOptions.filter((workspace) => !reservedPaths.has(workspace.path));
+    const filtered = search
+      ? options.filter((workspace) => `${workspace.name} ${workspace.path}`.toLocaleLowerCase().includes(search))
+      : options;
 
-    return options.slice(0, 8);
-  }, [workspaceOptions, workspaceSearch]);
+    return filtered.slice(0, 8);
+  }, [pinnedWorkspaces, recentWorkspaces, workspaceOptions, workspaceSearch]);
 
   function selectedWorkspacePath() {
     return workspacePath.trim() || undefined;
@@ -1281,11 +1288,13 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
      });
    }
 
-   function submitTask(prompt: string) {
-     if (queuedRunAdapter) {
-       queueRun(prompt);
-       return;
-     }
+  function submitTask(prompt: string) {
+    window.scrollTo({ top: 0, behavior: "auto" });
+
+    if (queuedRunAdapter) {
+      queueRun(prompt);
+      return;
+    }
 
      void startRun(prompt);
    }
@@ -1364,21 +1373,26 @@ const initialAgentLibraryForm: AgentLibraryFormState = {
                value={workspaceSearch}
              />
            </label>
-           {filteredWorkspaceOptions.length > 0 ? (
-             <div className="workspace-chip-row workspace-search-results">
-               {filteredWorkspaceOptions.map((workspace) => (
-                 <button
-                   aria-label={`Select workspace ${workspace.name}`}
-                   key={workspace.path}
-                   onClick={() => selectWorkspace(workspace)}
-                   type="button"
-                 >
-                   <span>{workspace.name}</span>
-                   <small>{workspace.path}</small>
-                 </button>
-               ))}
-             </div>
-           ) : null}
+           <div className="workspace-picker-group">
+             <h3>{workspaceSearch.trim() ? "Search results" : "Available workspaces"}</h3>
+             {filteredWorkspaceOptions.length > 0 ? (
+               <div className="workspace-chip-row workspace-search-results">
+                 {filteredWorkspaceOptions.map((workspace) => (
+                   <button
+                     aria-label={`Select workspace ${workspace.name}`}
+                     key={workspace.path}
+                     onClick={() => selectWorkspace(workspace)}
+                     type="button"
+                   >
+                     <span>{workspace.name}</span>
+                     <small>{workspace.path}</small>
+                   </button>
+                 ))}
+               </div>
+             ) : (
+               <p>{workspaceSearch.trim() ? "No matching workspaces found." : "No extra workspaces available yet."}</p>
+             )}
+           </div>
            <details className="workspace-advanced">
              <summary>Advanced path</summary>
              <label>
