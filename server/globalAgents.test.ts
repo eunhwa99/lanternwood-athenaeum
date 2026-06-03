@@ -39,4 +39,17 @@ describe("global agents", () => {
     expect(globalAgents.personas).toEqual({});
     expect(globalAgents.automationPolicy.allowRoots).toContain("/Users/eunhwa/IdeaProjects");
   });
+
+  it("allows the active workspace even when it lives outside the default roots", async () => {
+    const agentsHome = await createAgentsHome();
+    const activeWorkspace = "/Users/eunhwa/.codex/worktrees/1304/lanternwood-athenaeum";
+
+    const globalAgents = await loadGlobalAgents({
+      agentsHome,
+      homeDirectory: "/Users/eunhwa",
+      workspacePath: activeWorkspace,
+    });
+
+    expect(globalAgents.automationPolicy.allowRoots).toContain(activeWorkspace);
+  });
 });

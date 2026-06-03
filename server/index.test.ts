@@ -201,6 +201,51 @@ describe("Lanternwood Codex server", () => {
     expect(createAgentJobEvents).not.toHaveBeenCalled();
   });
 
+  it("accepts the active worktree path for workspace metadata inspection", async () => {
+    const server = createLanternwoodServer();
+    servers.push(server);
+    const baseUrl = await listen(server);
+
+    const response = await fetch(`${baseUrl}/api/workspace-metadata`, {
+      body: JSON.stringify({ workspacePath: process.cwd() }),
+      headers: {
+        "Content-Type": "application/json",
+        Origin: allowedOrigin,
+      },
+      method: "POST",
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      metadata: {
+        workspacePath: process.cwd(),
+      },
+    });
+  });
+
+  it("accepts the active worktree path for Codex run requests", async () => {
+    const createEvents = vi.fn(async function* () {
+      yield event("task.created");
+      yield event("agent.done", { finalOutput: "Done" });
+    });
+    const endpoint = await startServer(createEvents);
+
+    const response = await fetch(endpoint, {
+      body: JSON.stringify({ input: "Inspect this repo", workspacePath: process.cwd() }),
+      headers: {
+        "Content-Type": "application/json",
+        Origin: allowedOrigin,
+      },
+      method: "POST",
+    });
+
+    expect(response.status).toBe(200);
+    expect(collectSseEvents(await response.text())).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "task.created" }), expect.objectContaining({ type: "agent.done" })]),
+    );
+    expect(createEvents).toHaveBeenCalled();
+  });
+
   it("injects one-use approval tokens and accepts an approved danger-full-access retry", async () => {
     const createEvents = vi.fn(async function* (_input, _workflow, options) {
       if (options?.sandboxMode === "danger-full-access") {

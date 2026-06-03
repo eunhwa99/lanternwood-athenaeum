@@ -284,6 +284,16 @@ function promptedEvent(
   });
 }
 
+function lumaApprovalLanternPayload() {
+  const report = "Approval lantern raised.";
+
+  return {
+    report,
+    reportExcerpt: report,
+    speechBubble: report,
+  };
+}
+
 function agentNames(agentIds: string[], agents: AgentDefinition[]) {
   return agentIds
     .map((agentId) => agents.find((agent) => agent.id === agentId)?.displayName ?? agentId)
@@ -456,6 +466,15 @@ function buildSpecialistPrompt(specialist: SpecialistDefinition, input: string, 
   const sandboxMode = options?.sandboxMode ?? "workspace-write";
   const reviewContext =
     specialist.systemRole === "ReviewAgent" ? specialistReportsContext(options?.specialistReports ?? {}, agents) : "";
+  const reviewVerificationInstructions =
+    specialist.systemRole === "ReviewAgent"
+      ? `
+Review requirements:
+- Verify current workspace files before claiming whether a requested code or documentation change landed.
+- Check concrete on-disk evidence such as changed files, git diff, or the current file contents in the selected workspace.
+- Cite specific file paths and line references for claims about missing or completed changes.
+- If you cannot verify the workspace state directly, say that explicitly instead of assuming no change happened.`
+      : "";
 
   return `You are ${specialist.displayName}, ${specialist.promptInstruction}.
 
@@ -463,6 +482,7 @@ You are one specialist in The Lanternwood Athenaeum. Luma will synthesize your o
 ${permissionRequestInstructions(sandboxMode)}
 ${context ? `\n${context}\n` : ""}
 ${reviewContext ? `\n${reviewContext}\n` : ""}
+${reviewVerificationInstructions ? `\n${reviewVerificationInstructions}\n` : ""}
 
 User request:
 ${input}`;
@@ -1420,7 +1440,7 @@ export async function* createCodexEvents(
     try {
       const finalOutput = requireFinalOutput(result.finalOutput);
 
-      yield event(taskId, index++, "luma", "agent.reporting", "Luma raises the blue approval lantern");
+      yield event(taskId, index++, "luma", "agent.reporting", "Luma raises the blue approval lantern", lumaApprovalLanternPayload());
       for (const specialist of selectedSpecialists) {
         yield event(taskId, index++, specialist.id, "agent.done", `${specialist.displayName} returns to their alcove`);
       }
@@ -1842,7 +1862,7 @@ export async function* createCodexSynthesisEvents(
     return;
   }
 
-  yield event(taskId, index++, "luma", "agent.reporting", "Luma raises the blue approval lantern");
+  yield event(taskId, index++, "luma", "agent.reporting", "Luma raises the blue approval lantern", lumaApprovalLanternPayload());
   for (const specialist of selectedSpecialists) {
     yield event(taskId, index++, specialist.id, "agent.done", `${specialist.displayName} returns to their alcove`);
   }
