@@ -1353,12 +1353,20 @@ describe("branch worktree launch", () => {
         throw error;
       }
 
-      if (command === "show-ref --verify --quiet refs/remotes/origin/feature/x") {
-        return "";
+      if (command === "show-ref -s refs/remotes/origin/feature/x") {
+        return "0123456789abcdef0123456789abcdef01234567\n";
       }
 
       if (command === "remote get-url origin") {
         return "git@github.com:openai/demo.git\n";
+      }
+
+      if (command === "ls-remote --exit-code --heads origin feature/x") {
+        return "0123456789abcdef0123456789abcdef01234567\trefs/heads/feature/x\n";
+      }
+
+      if (command === "fetch origin refs/heads/feature/x:refs/remotes/origin/feature/x") {
+        throw new Error("unexpected fetch call");
       }
 
       if (command === `worktree add -b feature/x ${expectedWorkspacePath} refs/remotes/origin/feature/x`) {
@@ -1380,7 +1388,69 @@ describe("branch worktree launch", () => {
     });
   });
 
-  it("falls back to local base-branch creation when origin exists but ls-remote is temporarily unavailable", async () => {
+  it("prefers the verified remote branch tip when a local branch is stale", async () => {
+    const root = await createTempDirectory();
+    const repository = await createRepository(root, "demo");
+    const resolvedRepository = await realpath(repository);
+    const commonGitDirectory = join(resolvedRepository, ".git");
+    const expectedWorkspacePath = worktreePathForBranch(
+      join(await realpath(root), ".lanternwood-worktrees"),
+      resolvedRepository,
+      "feature/x",
+      commonGitDirectory,
+    );
+    const execFile = vi.fn(async (_file: string, args: string[]) => {
+      const command = args.join(" ");
+      const identityResponse = repositoryIdentityResponse(command, resolvedRepository, commonGitDirectory);
+
+      if (identityResponse !== undefined) {
+        return identityResponse;
+      }
+
+      if (command === "worktree list --porcelain") {
+        return "";
+      }
+
+      if (command === "show-ref --verify --quiet refs/heads/feature/x") {
+        return "";
+      }
+
+      if (command === "show-ref -s refs/remotes/origin/feature/x") {
+        return "1111111111111111111111111111111111111111\n";
+      }
+
+      if (command === "show-ref -s refs/heads/feature/x") {
+        return "0000000000000000000000000000000000000000\n";
+      }
+
+      if (command === "remote get-url origin") {
+        return "git@github.com:openai/demo.git\n";
+      }
+
+      if (command === "ls-remote --exit-code --heads origin feature/x") {
+        return "2222222222222222222222222222222222222222\trefs/heads/feature/x\n";
+      }
+
+      if (command === "fetch origin refs/heads/feature/x:refs/remotes/origin/feature/x") {
+        return "";
+      }
+
+      if (command === `worktree add ${expectedWorkspacePath} refs/remotes/origin/feature/x`) {
+        return "";
+      }
+
+      throw new Error(`Unexpected git args: ${command}`);
+    });
+
+    await expect(launchBranchWorktree({ branch: "feature/x", repositoryPath: repository }, { allowRoots: [root], execFile })).resolves.toEqual({
+      branch: "feature/x",
+      created: true,
+      repositoryPath: await realpath(repository),
+      workspacePath: expectedWorkspacePath,
+    });
+  });
+
+  it("fails when remote verification fails for transport/auth errors", async () => {
     const root = await createTempDirectory();
     const repository = await createRepository(root, "demo");
     const resolvedRepository = await realpath(repository);
@@ -1409,7 +1479,7 @@ describe("branch worktree launch", () => {
         throw error;
       }
 
-      if (command === "show-ref --verify --quiet refs/remotes/origin/feature/x") {
+      if (command === "show-ref -s refs/remotes/origin/feature/x") {
         const error = new Error("missing cached remote branch");
         Object.assign(error, { code: 1 });
         throw error;
@@ -1425,23 +1495,12 @@ describe("branch worktree launch", () => {
         throw error;
       }
 
-      if (command === "symbolic-ref --quiet refs/remotes/origin/HEAD") {
-        return "refs/remotes/origin/main\n";
-      }
-
-      if (command === `worktree add -b feature/x ${expectedWorkspacePath} refs/remotes/origin/main`) {
-        return "";
-      }
-
       throw new Error(`Unexpected git args: ${command}`);
     });
 
-    await expect(launchBranchWorktree({ branch: "feature/x", repositoryPath: repository }, { allowRoots: [root], execFile })).resolves.toEqual({
-      branch: "feature/x",
-      created: true,
-      repositoryPath: resolvedRepository,
-      workspacePath: expectedWorkspacePath,
-    });
+    await expect(launchBranchWorktree({ branch: "feature/x", repositoryPath: repository }, { allowRoots: [root], execFile })).rejects.toThrow(
+      "origin unavailable",
+    );
   });
 
   it("recovers when concurrent branch creation makes worktree add -b report that the branch already exists", async () => {

@@ -161,11 +161,38 @@ async function branchExistsLocally(runGit: GitExecFile, repositoryPath: string, 
   }
 }
 
+async function isBranchUpToDateWithRemote(runGit: GitExecFile, repositoryPath: string, branch: string) {
+  try {
+    const [localCommit, remoteCommit] = await Promise.all([
+      runGit("git", ["show-ref", "-s", `refs/heads/${branch}`], { cwd: repositoryPath }).then((value) => value.trim()),
+      runGit("git", ["show-ref", "-s", `refs/remotes/origin/${branch}`], { cwd: repositoryPath }).then((value) => value.trim()),
+    ]);
+
+    return localCommit !== "" && localCommit === remoteCommit;
+  } catch {
+    return false;
+  }
+}
+
 function hasGitExitCode(error: unknown, codes: number[]) {
   return typeof error === "object" && error !== null && "code" in error && codes.includes(Number(error.code));
 }
 
-async function ensureRemoteBranchRef(runGit: GitExecFile, repositoryPath: string, branch: string) {
+async function ensureRemoteBranchRef(runGit: GitExecFile, repositoryPath: string, branch: string, localBranchExists: boolean) {
+  if (localBranchExists) {
+    const remoteRef = await runGit("git", ["show-ref", "-s", `refs/remotes/origin/${branch}`], { cwd: repositoryPath }).catch(
+      () => undefined as string | undefined,
+    );
+
+    if (!remoteRef?.trim()) {
+      return false;
+    }
+
+    await runGit("git", ["fetch", "origin", `refs/heads/${branch}:refs/remotes/origin/${branch}`], { cwd: repositoryPath });
+
+    return true;
+  }
+
   let originExists = true;
 
   try {
@@ -178,30 +205,34 @@ async function ensureRemoteBranchRef(runGit: GitExecFile, repositoryPath: string
     }
   }
 
-  try {
-    await runGit("git", ["show-ref", "--verify", "--quiet", `refs/remotes/origin/${branch}`], { cwd: repositoryPath });
-    return true;
-  } catch (error) {
-    if (!hasGitExitCode(error, [1])) {
-      throw error;
-    }
-  }
-
   if (!originExists) {
     return false;
   }
 
   try {
-    await runGit("git", ["ls-remote", "--exit-code", "--heads", "origin", branch], { cwd: repositoryPath });
-  } catch (error) {
-    if (hasGitExitCode(error, [1, 2])) {
+    const remoteRef = await runGit("git", ["ls-remote", "--exit-code", "--heads", "origin", branch], { cwd: repositoryPath });
+    const remoteOid = remoteRef.trim().split(/\s+/)[0];
+
+    if (!remoteOid) {
       return false;
     }
-    return false;
-  }
 
-  await runGit("git", ["fetch", "origin", `refs/heads/${branch}:refs/remotes/origin/${branch}`], { cwd: repositoryPath });
-  return true;
+    const localOid = await runGit("git", ["show-ref", "-s", `refs/remotes/origin/${branch}`], {
+      cwd: repositoryPath,
+    }).catch(() => undefined as string | undefined);
+
+    if (!localOid || localOid.trim() !== remoteOid) {
+      await runGit("git", ["fetch", "origin", `refs/heads/${branch}:refs/remotes/origin/${branch}`], { cwd: repositoryPath });
+    }
+
+    return true;
+  } catch (error) {
+    if (hasGitExitCode(error, [1])) {
+      return false;
+    }
+
+    throw error;
+  }
 }
 
 async function resolveWorktreeBaseBranch(runGit: GitExecFile, repositoryPath: string) {
@@ -781,7 +812,9 @@ export async function launchBranchWorktree(
     const lanternwoodHome = options.lanternwoodHome ?? defaultLanternwoodHome(repositoryRoot);
     const workspacePath = worktreePathForBranch(lanternwoodHome, repositoryPath, branch, commonGitDirectory, repositoryLabel);
     const localBranchExists = await branchExistsLocally(runGit, repositoryPath, branch);
-    const remoteBranchExists = localBranchExists ? false : await ensureRemoteBranchRef(runGit, repositoryPath, branch);
+    const remoteBranchExists = await ensureRemoteBranchRef(runGit, repositoryPath, branch, localBranchExists);
+    const localBranchMatchesRemote =
+      localBranchExists && remoteBranchExists ? await isBranchUpToDateWithRemote(runGit, repositoryPath, branch) : false;
     const worktrees = parsePorcelainWorktrees(
       await runGit("git", ["worktree", "list", "--porcelain"], { cwd: repositoryPath }),
     );
@@ -832,7 +865,7 @@ export async function launchBranchWorktree(
         throw new Error("Managed workspace provenance could not be verified");
       }
 
-      if (localBranchExists) {
+      if (localBranchExists && (!remoteBranchExists || localBranchMatchesRemote)) {
         await runGit(
           "git",
           branchAlreadyCheckedOut ? ["worktree", "add", "--detach", workspacePath, branch] : ["worktree", "add", workspacePath, branch],
@@ -841,7 +874,11 @@ export async function launchBranchWorktree(
           },
         );
       } else if (remoteBranchExists) {
-        await runGit("git", ["worktree", "add", "-b", branch, workspacePath, `refs/remotes/origin/${branch}`], { cwd: repositoryPath });
+        await runGit(
+          "git",
+          branchAlreadyCheckedOut ? ["worktree", "add", "--detach", workspacePath, `refs/remotes/origin/${branch}`] : ["worktree", "add", workspacePath, `refs/remotes/origin/${branch}`],
+          { cwd: repositoryPath },
+        );
       } else {
         const baseBranch = await resolveWorktreeBaseBranch(runGit, repositoryPath);
 
