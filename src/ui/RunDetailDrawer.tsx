@@ -209,21 +209,42 @@ function WorkloadTaskView({ selectedTaskId, state }: { selectedTaskId?: string; 
        ? reportList.find((report) => reportKey(report) === selectedReport.key) ?? reportList[0]
        : reportList[0];
 
-   useEffect(() => {
-     if (!isOpen) {
-       return;
-     }
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
 
      previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
      const appRoot = document.querySelector<HTMLElement>(".library-stage");
      appRoot?.setAttribute("inert", "");
      window.setTimeout(() => focusableElements(drawerRef.current ?? document.body)[0]?.focus(), 0);
 
-     return () => {
-       appRoot?.removeAttribute("inert");
-       previousFocusRef.current?.focus();
-     };
-   }, [isOpen]);
+    return () => {
+      appRoot?.removeAttribute("inert");
+      previousFocusRef.current?.focus({ preventScroll: true });
+
+      const libraryStage = document.querySelector<HTMLElement>(".library-stage");
+      if (libraryStage) {
+        if (typeof libraryStage.scrollTo === "function") {
+          try {
+            libraryStage.scrollTo({ top: 0, left: 0, behavior: "auto" });
+          } catch {
+            libraryStage.scrollTop = 0;
+          }
+        } else {
+          libraryStage.scrollTop = 0;
+        }
+      }
+
+      if (typeof window.scrollTo === "function") {
+        try {
+          window.scrollTo(0, 0);
+        } catch {
+          // jsdom scrollTo is not implemented in test environments.
+        }
+      }
+    };
+  }, [isOpen]);
 
    if (!isOpen) {
      return null;

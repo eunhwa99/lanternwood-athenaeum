@@ -492,6 +492,12 @@
     padding: 12px;
   }
 
+  @media (min-width: 960px) and (max-height: 860px) {
+    .workspace-panel {
+      transform: translateY(-32px);
+    }
+  }
+
   .workspace-panel header {
     display: flex;
     align-items: baseline;
@@ -1511,7 +1517,7 @@
         "approval approval"
         "queue queue";
       align-items: start;
-      gap: 8px;
+      gap: 4px;
       padding-block: 10px;
     }
 
@@ -1584,8 +1590,15 @@
     }
 
     .workspace-write-toggle {
+      display: inline-flex;
+      order: -1;
       justify-self: start;
       padding-bottom: 0;
+    }
+
+    .workspace-panel {
+      display: flex;
+      flex-direction: column;
     }
 
     .agent-library-wide {
