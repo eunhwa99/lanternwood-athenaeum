@@ -227,6 +227,8 @@
   }
 
   .live-run-inspector {
+    position: relative;
+    z-index: 3;
     grid-area: inspector;
     display: flex;
     flex-direction: column;
@@ -293,7 +295,7 @@
 
   .agent-roster-group {
     min-width: 0;
-    overflow: hidden;
+    overflow: visible;
     border: 1px solid rgba(230, 205, 145, 0.14);
     border-radius: 8px;
     background: rgba(23, 36, 47, 0.42);
@@ -335,11 +337,11 @@
     display: grid;
     grid-template-columns: minmax(86px, 0.7fr) minmax(0, 1fr) auto;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
     min-width: 0;
-    min-height: 56px;
+    min-height: 52px;
     overflow: visible;
-    padding: 8px 10px;
+    padding: 7px 9px;
     border: 1px solid rgba(230, 205, 145, 0.16);
     border-radius: 8px;
     background: rgba(31, 52, 47, 0.58);
@@ -451,7 +453,7 @@
  }
 
   .agent-roster-row button {
-    padding: 7px 9px;
+    padding: 6px 8px;
     white-space: nowrap;
   }
 
@@ -484,17 +486,17 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     align-items: start;
-    gap: 10px;
+    gap: 8px;
     width: 100%;
     border: 1px solid rgba(230, 205, 145, 0.14);
     border-radius: 8px;
     background: rgba(17, 28, 32, 0.62);
-    padding: 12px;
+    padding: 10px;
   }
 
   @media (min-width: 960px) and (max-height: 860px) {
     .workspace-panel {
-      transform: translateY(-32px);
+      transform: translateY(-60px);
     }
   }
 
@@ -531,7 +533,6 @@
     align-items: center;
     gap: 8px;
     min-width: max-content;
-    padding-bottom: 8px;
   }
 
   .workspace-write-toggle input {
@@ -574,14 +575,14 @@
 
   .workspace-picker-group {
     display: grid;
-    gap: 6px;
+    gap: 4px;
     min-width: 0;
   }
 
   .workspace-chip-row {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 4px;
     min-width: 0;
   }
 
@@ -614,6 +615,13 @@
     flex-basis: 100%;
   }
 
+  .workspace-search-results {
+    max-height: 155px;
+    overflow: auto;
+    align-content: start;
+    padding-right: 2px;
+  }
+
   .workspace-advanced {
     display: grid;
     gap: 6px;
@@ -633,7 +641,7 @@
   .workspace-actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
+    gap: 6px;
   }
 
   .workspace-actions button {
@@ -642,7 +650,7 @@
 
   .workspace-panel button,
   .workspace-context-panel button {
-    padding: 10px 14px;
+    padding: 9px 12px;
   }
 
   .workspace-context-panel,
@@ -1528,11 +1536,24 @@
 
     .workspace-panel {
       grid-template-columns: 1fr;
+      max-height: 340px;
+      overflow: auto;
     }
 
     .workspace-write-toggle {
       justify-self: start;
       padding-bottom: 0;
+    }
+
+    .live-run-inspector {
+      max-height: 520px;
+      overflow: auto;
+    }
+
+    .agent-roster {
+      max-height: 220px;
+      overflow: auto;
+      padding-right: 2px;
     }
 
     .workspace-context-panel,
@@ -1583,6 +1604,11 @@
     .workspace-panel,
     .workspace-context-grid {
       grid-template-columns: 1fr;
+    }
+
+    .workspace-panel {
+      max-height: 300px;
+      overflow: auto;
     }
 
     .permission-request-panel {

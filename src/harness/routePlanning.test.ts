@@ -67,6 +67,14 @@ describe("planRoute", () => {
     expect(route("최신 정보랑 코드 문서 탐색해서 사실 확인해줘").selectedAgentIds).toContain("orion");
   });
 
+  it("routes Korean repo-improvement review prompts to analysis specialists", () => {
+    expect(
+      route("MCPContentSearch 리포를 inspect하고 현재 코드베이스의 구조, 품질, 유지보수성 관점에서 개선점을 우선순위 순으로 구체적으로 제안해줘"),
+    ).toMatchObject({
+      selectedAgentIds: ["orion", "argus"],
+    });
+  });
+
   it("selects Quill without Argus for low-risk writing requests", () => {
     expect(route("write a README outline").selectedAgentIds).toEqual(["quill"]);
     expect(route("write docs").selectedAgentIds).toEqual(["quill"]);

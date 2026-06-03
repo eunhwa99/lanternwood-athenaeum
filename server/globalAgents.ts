@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createDefaultCoordinatorPolicy, type CoordinatorPolicy } from "./coordinatorPolicy";
@@ -14,6 +14,7 @@ export type GlobalAgents = {
 type LoadGlobalAgentsOptions = {
   agentsHome?: string;
   homeDirectory?: string;
+  workspacePath?: string;
 };
 
 function readOptionalText(path: string) {
@@ -38,6 +39,14 @@ function readOptionalJson(path: string): Record<string, unknown> | undefined {
   }
 }
 
+function normalizeAllowRoot(path: string) {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return path;
+  }
+}
+
 export async function loadGlobalAgents(options: LoadGlobalAgentsOptions = {}): Promise<GlobalAgents> {
   const homeDirectory = options.homeDirectory ?? homedir();
   const configuredAgentsHome = options.agentsHome ?? process.env.LANTERNWOOD_AGENTS_HOME?.trim();
@@ -55,8 +64,32 @@ export async function loadGlobalAgents(options: LoadGlobalAgentsOptions = {}): P
   return {
     agentsHome,
     automationPolicy: {
-      ...createDefaultCoordinatorPolicy(homeDirectory),
-      ...readOptionalJson(join(agentsHome, "automation_policy.json")),
+      ...(() => {
+        const defaultPolicy = createDefaultCoordinatorPolicy(homeDirectory);
+        const configuredPolicy = readOptionalJson(join(agentsHome, "automation_policy.json"));
+        const activeWorkspacePath = options.workspacePath?.trim() || process.cwd();
+        const allowRoots = new Set(
+          (Array.isArray(defaultPolicy.allowRoots) ? defaultPolicy.allowRoots : []).map(normalizeAllowRoot),
+        );
+
+        if (Array.isArray(configuredPolicy?.allowRoots)) {
+          for (const root of configuredPolicy.allowRoots) {
+            if (typeof root === "string" && root.trim()) {
+              allowRoots.add(normalizeAllowRoot(root));
+            }
+          }
+        }
+
+        if (activeWorkspacePath) {
+          allowRoots.add(normalizeAllowRoot(activeWorkspacePath));
+        }
+
+        return {
+          ...defaultPolicy,
+          ...configuredPolicy,
+          allowRoots: Array.from(allowRoots),
+        };
+      })(),
     },
     personas,
   };

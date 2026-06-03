@@ -305,6 +305,82 @@ import { latestPermissionRequest } from "./permissionRequests";
      ]);
    });
 
+   it("shows discovered workspaces before typing and filters them in place", async () => {
+     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+       new Response(
+         JSON.stringify({
+           currentWorkspace: "/home/eunhwapark/IdeaProjects/lanternwood-athenaeum",
+           roots: ["/home/eunhwapark/IdeaProjects"],
+           workspaces: [
+             { name: "MCPContentSearch", path: "/home/eunhwapark/IdeaProjects/MCPContentSearch", root: "/home/eunhwapark/IdeaProjects" },
+             { name: "RepoLens", path: "/home/eunhwapark/IdeaProjects/RepoLens", root: "/home/eunhwapark/IdeaProjects" },
+             {
+               name: "lanternwood-athenaeum",
+               path: "/home/eunhwapark/IdeaProjects/lanternwood-athenaeum",
+               root: "/home/eunhwapark/IdeaProjects",
+             },
+           ],
+         }),
+         { status: 200 },
+       ),
+     );
+     vi.stubGlobal("fetch", fetchMock);
+
+     renderApp(<AppShell runAdapter={mockRunAdapter} />);
+
+     const workspaceRegion = screen.getByRole("region", { name: "Workspace" });
+     expect(await within(workspaceRegion).findByText("Available workspaces")).toBeInTheDocument();
+     expect(within(workspaceRegion).getByRole("button", { name: "Select workspace MCPContentSearch" })).toBeInTheDocument();
+     expect(within(workspaceRegion).getByRole("button", { name: "Select workspace RepoLens" })).toBeInTheDocument();
+
+     fireEvent.change(screen.getByLabelText("Workspace search"), { target: { value: "repo" } });
+
+     const searchResultsHeading = within(workspaceRegion).getByText("Search results");
+     const searchResultsGroup = searchResultsHeading.parentElement;
+
+     expect(searchResultsGroup).not.toBeNull();
+     expect(within(searchResultsGroup as HTMLElement).getByRole("button", { name: "Select workspace RepoLens" })).toBeInTheDocument();
+     expect(
+       within(searchResultsGroup as HTMLElement).queryByRole("button", { name: "Select workspace MCPContentSearch" }),
+     ).not.toBeInTheDocument();
+   });
+
+   it("keeps pinned and recent workspaces searchable when a query matches them", async () => {
+     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+       new Response(
+         JSON.stringify({
+           currentWorkspace: "/home/eunhwapark/IdeaProjects/lanternwood-athenaeum",
+           roots: ["/home/eunhwapark/IdeaProjects"],
+           workspaces: [
+             { name: "MCPContentSearch", path: "/home/eunhwapark/IdeaProjects/MCPContentSearch", root: "/home/eunhwapark/IdeaProjects" },
+             {
+               name: "lanternwood-athenaeum",
+               path: "/home/eunhwapark/IdeaProjects/lanternwood-athenaeum",
+               root: "/home/eunhwapark/IdeaProjects",
+             },
+           ],
+         }),
+         { status: 200 },
+       ),
+     );
+     vi.stubGlobal("fetch", fetchMock);
+
+     renderApp(<AppShell runAdapter={mockRunAdapter} />);
+
+     await screen.findByRole("button", { name: "Select workspace MCPContentSearch" });
+
+     fireEvent.change(screen.getByLabelText("Workspace search"), { target: { value: "mcp" } });
+
+     const workspaceRegion = screen.getByRole("region", { name: "Workspace" });
+     const searchResultsHeading = within(workspaceRegion).getByText("Search results");
+     const searchResultsGroup = searchResultsHeading.parentElement;
+
+     expect(searchResultsGroup).not.toBeNull();
+     expect(
+       within(searchResultsGroup as HTMLElement).getByRole("button", { name: "Select workspace MCPContentSearch" }),
+     ).toBeInTheDocument();
+   });
+
    it("posts generated agent definitions from a single description", async () => {
      const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
        const url = String(input);
